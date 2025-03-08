@@ -8,12 +8,14 @@ from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
 from diffusion_policy.model.common.normalizer import LinearNormalizer
 from diffusion_policy.model.common.module_attr_mixin import ModuleAttrMixin
 from diffusion_policy.world_model.base_world_model import BaseWorldModel
+from diffusion_policy.model.vision.multi_image_obs_encoder import MultiImageObsEncoder
+from diffusion_policy.common.pytorch_util import dict_apply
 
 # Example diffusion model architecture
 from diffusion_policy.model.diffusion.conditional_unet1d import ConditionalUnet1D
 from diffusers import UNet2DConditionModel
 
-class DiffusionImageUnetWorldModel(BaseWorldModel):
+class DiffusionWorldModelImageUnet(BaseWorldModel):
     """
     Diffusion-based image world model. Predicts future images conditioned on
     (past images, action sequence).
@@ -25,10 +27,10 @@ class DiffusionImageUnetWorldModel(BaseWorldModel):
     def __init__(self,
                  shape_meta: dict,
                  noise_scheduler: DDPMScheduler,
+                 obs_encoder: MultiImageObsEncoder,
                  n_obs_steps: int,
                  n_future_steps : int = 1,
                  down_dims=(256,512,1024),
-                 cond_predict_scale=True,
                  num_inference_steps=None,
                  **kwargs):
         """
@@ -44,17 +46,15 @@ class DiffusionImageUnetWorldModel(BaseWorldModel):
         """
         super().__init__(shape_meta, **kwargs)
 
-        # parse shapes
-        obs_img_shape = shape_meta['obs_image']['shape']  # e.g. (3, H, W)
-        c, h, w = obs_img_shape
-        # flatten entire future horizon
+        # get feature dim
+        obs_feature_dim = obs_encoder.output_shape()[0]
+
         self.n_future_steps = n_future_steps
 
         # parse action dimension
         action_dim = shape_meta['action']['shape'][0]
-        self.horizon = kwargs.get('horizon', 8)  # or however you define
         # We'll condition globally on the entire action chunk
-        global_cond_dim = self.horizon * action_dim
+        global_cond_dim = obs_feature_dim * n_obs_steps + action_dim * self.n_future_steps
 
         self.model = UNet2DConditionModel(
             in_channels=self.n_future_steps*3,                    # For RGB images (default is 4)
@@ -75,6 +75,8 @@ class DiffusionImageUnetWorldModel(BaseWorldModel):
             ),
         )
 
+        self.obs_encoder = obs_encoder
+
         self.noise_scheduler = noise_scheduler
         if num_inference_steps is None:
             num_inference_steps = noise_scheduler.config.num_train_timesteps
@@ -84,55 +86,53 @@ class DiffusionImageUnetWorldModel(BaseWorldModel):
         self.normalizer = LinearNormalizer()
         self.n_obs_steps = n_obs_steps
 
-        # possibly store other info
-        self.kwargs = kwargs
-
-    def predict_future(self, obs_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+    def predict_future(self, obs_dict: Dict[str, torch.Tensor], action) -> Dict[str, torch.Tensor]:
         """
         Inference method:
           - 'obs_dict' should contain "obs" => (B, n_obs_steps, C, H, W)
-            and "action" => (B, horizon, action_dim)
+            and "action" => (B, n_future_steps, action_dim)
           - returns a dict with "predicted_future" => (B, n_future_steps, C, H, W)
         """
-        # for safety:
-        self.model.eval()
+        with torch.inference_mode():
+            nobs = self.normalizer.normalize(obs_dict)
+            nactions = self.normalizer['action'].normalize(action)
+            history_imgs = nobs['ímage']  # shape (B, n_obs_steps, C, H, W)
+            action_seq = nactions  # shape (B, n_future_steps, Da)
+            device = history_imgs.device
+            dtype = history_imgs.dtype
 
-        nobs = self.normalizer.normalize(obs_dict)
-        obs_imgs = nobs['obs']  # shape (B, n_obs_steps, C, H, W)
-        action_seq = nobs['action']  # shape (B, horizon, Da)
-        device = obs_imgs.device
-        dtype = obs_imgs.dtype
+            B, To, C, H, W = history_imgs.shape
+            assert To == self.n_obs_steps, f"Expected n_obs_steps={self.n_obs_steps}, got {To}."
 
-        B, To, C, H, W = obs_imgs.shape
-        assert To == self.n_obs_steps, f"Expected n_obs_steps={self.n_obs_steps}, got {To}."
+            # condition
+            condition_obs = {
+                'image': history_imgs,
+            }
+            this_nobs = dict_apply(condition_obs, lambda x: x.reshape(-1, *x.shape[2:]))
+            nobs_features = self.obs_encoder(this_nobs)
+            global_cond = torch.concat((nobs_features.reshape(B, -1), action_seq.reshape(B, -1)), dim=-1)
 
-        # Flatten shape for the future frames we want to generate
-        future_dim = self.future_dim
+            # Start from random noise
+            # If you want the model to be deterministic, consider using zero noise
+            noisy_image = torch.randn((B, self.n_future_steps * C, H, W), device=device, dtype=dtype)
 
-        # Global condition from action sequence
-        global_cond = action_seq.reshape(B, -1)  # (B, horizon*Da)
+            # set up timesteps
+            self.noise_scheduler.set_timesteps(self.num_inference_steps)
 
-        # Start from random noise
-        # If you want the model to be deterministic, consider using zero noise
-        noisy_image = torch.randn((B, self.n_future_steps * C, H, W), device=device, dtype=dtype)
+            for t in self.noise_scheduler.timesteps:
+                # forward the model
+                model_out = self.model(
+                    sample=noisy_image,
+                    timestep=t,
+                    encoder_hidden_states=global_cond
+                )
+                # diffusion update
+                noisy_image = self.noise_scheduler.step(
+                    model_out, t, noisy_image
+                ).prev_sample
 
-        # set up timesteps
-        self.noise_scheduler.set_timesteps(self.num_inference_steps)
-
-        for t in self.noise_scheduler.timesteps:
-            # forward the model
-            model_out = self.model(
-                sample=noisy_image,
-                timestep=t,
-                encoder_hidden_states=global_cond
-            )
-            # diffusion update
-            noisy_image = self.noise_scheduler.step(
-                model_out, t, noisy_image
-            ).prev_sample
-
-        # now 'trajectory' is our final predicted future in flattened form
-        predicted = noisy_image.view(B, self.n_future_steps, C, H, W)
+            # now 'trajectory' is our final predicted future in flattened form
+            predicted = noisy_image.view(B, self.n_future_steps, C, H, W)
 
         return {
             "predicted_future": predicted
@@ -154,13 +154,13 @@ class DiffusionImageUnetWorldModel(BaseWorldModel):
           4) model predicts noise (or sample)
           5) MSE loss
         """
-        # from the batch, we typically have:
-        #   batch['obs']: (B, n_obs_steps, C, H, W)
-        #   batch['action']: (B, horizon, Da)
-        #   batch['future']: (B, n_future_steps, C, H, W)
-        obs_imgs = batch['obs']
-        action_seq = batch['action']
-        future_imgs = batch['future']
+        nobs = self.normalizer.normalize(batch['obs'])
+        nactions = self.normalizer['action'].normalize(batch['action'])
+
+        imgs = nobs['image']
+        history_imgs = imgs[:, :self.n_obs_steps]
+        future_imgs = imgs[:, self.n_obs_steps:self.n_obs_steps+self.n_future_steps]
+        action_seq = batch['action'][:, :self.n_obs_steps+self.n_future_steps]
 
         B, T, C, H, W = future_imgs.shape
         assert T == self.n_future_steps, f"Expected n_future_steps={self.n_future_steps}, got {T}."
@@ -180,14 +180,18 @@ class DiffusionImageUnetWorldModel(BaseWorldModel):
         noisy_x = self.noise_scheduler.add_noise(x_0, noise, timesteps)
 
         # condition
-        global_cond = action_seq.reshape(B, -1)
+        condition_obs = {
+            'image': history_imgs,
+        }
+        this_nobs = dict_apply(condition_obs, lambda x: x.reshape(-1, *x.shape[2:]))
+        nobs_features = self.obs_encoder(this_nobs)
+        global_cond = torch.concat((nobs_features.reshape(B, -1), action_seq.reshape(B, -1)), dim=-1)
 
         # predict with the model
         model_out = self.model(
-            noisy_x, 
-            timesteps,
-            local_cond=None,
-            global_cond=global_cond
+            sample=noisy_x,
+            timestep=timesteps,
+            encoder_hidden_states=global_cond
         )
 
         # compute target
