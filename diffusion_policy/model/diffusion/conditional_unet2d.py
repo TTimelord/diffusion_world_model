@@ -180,24 +180,10 @@ class ResBlocks(nn.Module):
 
 # UNet
 class ConditionalUNet2D(nn.Module):
-    def __init__(self, cond_channels: int, 
-                 depths: List[int], 
-                 channels: List[int], 
-                 attn_depths: List[int],
-                 diffusion_step_embed_dim: int = 128) -> None:
+    def __init__(self, cond_channels: int, depths: List[int], channels: List[int], attn_depths: List[int]) -> None:
         super().__init__()
         assert len(depths) == len(channels) == len(attn_depths)
         self._num_down = len(channels) - 1
-
-        dsed = diffusion_step_embed_dim
-        self.diffusion_step_encoder = nn.Sequential(
-            SinusoidalPosEmb(dsed),
-            nn.Linear(dsed, dsed * 4),
-            nn.Mish(),
-            nn.Linear(dsed * 4, dsed),
-        )
-        cond_dim = dsed
-        cond_dim += cond_channels
 
         d_blocks, u_blocks = [], []
         for i, n in enumerate(depths):
@@ -207,7 +193,7 @@ class ConditionalUNet2D(nn.Module):
                 ResBlocks(
                     list_in_channels=[c1] + [c2] * (n - 1),
                     list_out_channels=[c2] * n,
-                    cond_channels=cond_dim,
+                    cond_channels=cond_channels,
                     attn=attn_depths[i],
                 )
             )
@@ -215,7 +201,7 @@ class ConditionalUNet2D(nn.Module):
                 ResBlocks(
                     list_in_channels=[2 * c2] * n + [c1 + c2],
                     list_out_channels=[c2] * n + [c1],
-                    cond_channels=cond_dim,
+                    cond_channels=cond_channels,
                     attn=attn_depths[i],
                 )
             )
@@ -225,7 +211,7 @@ class ConditionalUNet2D(nn.Module):
         self.mid_blocks = ResBlocks(
             list_in_channels=[channels[-1]] * 2,
             list_out_channels=[channels[-1]] * 2,
-            cond_channels=cond_dim,
+            cond_channels=cond_channels,
             attn=True,
         )
 
@@ -234,15 +220,7 @@ class ConditionalUNet2D(nn.Module):
         self.downsamples = nn.ModuleList(downsamples)
         self.upsamples = nn.ModuleList(upsamples)
 
-    def forward(self, x: Tensor, timestep: Tensor, cond: Tensor) -> Tensor:
-        # condition
-        cond_feature = self.diffusion_step_encoder(timestep)
-
-        cond_feature = torch.cat([
-            cond_feature, cond
-        ], axis=-1)
-
-        # x
+    def forward(self, x: Tensor, cond: Tensor) -> Tensor:
         *_, h, w = x.size()
         n = self._num_down
         padding_h = math.ceil(h / 2 ** n) * 2 ** n - h
@@ -252,15 +230,15 @@ class ConditionalUNet2D(nn.Module):
         d_outputs = []
         for block, down in zip(self.d_blocks, self.downsamples):
             x_down = down(x)
-            x, block_outputs = block(x_down, cond_feature)
+            x, block_outputs = block(x_down, cond)
             d_outputs.append((x_down, *block_outputs))
 
-        x, _ = self.mid_blocks(x, cond_feature)
+        x, _ = self.mid_blocks(x, cond)
         
         u_outputs = []
         for block, up, skip in zip(self.u_blocks, self.upsamples, reversed(d_outputs)):
             x_up = up(x)
-            x, block_outputs = block(x_up, cond_feature, skip[::-1])
+            x, block_outputs = block(x_up, cond, skip[::-1])
             u_outputs.append((x_up, *block_outputs))
 
         x = x[..., :h, :w]

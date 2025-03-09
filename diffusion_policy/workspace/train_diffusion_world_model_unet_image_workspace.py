@@ -181,23 +181,27 @@ class TrainDiffusionWorldModelUnetImageWorkspace(BaseWorkspace):
                             train_sampling_batch = batch
 
                         # compute loss
+                        raw_loss = self.model.compute_loss(batch)
+                        loss = raw_loss / cfg.training.gradient_accumulate_every
+                        loss.backward()
 
-                        with profile(
-                            activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
-                            profile_memory=True,  # <<-- important!
-                            record_shapes=True
-                        ) as prof:
-                            with record_function("model_inference"):
-                                # run your forward pass
+                        # # profiling
+                        # with profile(
+                        #     activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+                        #     profile_memory=True,  # <<-- important!
+                        #     record_shapes=True
+                        # ) as prof:
+                        #     with record_function("model_inference"):
+                        #         # run your forward pass
 
-                                raw_loss = self.model.compute_loss(batch)
-                                loss = raw_loss / cfg.training.gradient_accumulate_every
-                                loss.backward()
+                        #         raw_loss = self.model.compute_loss(batch)
+                        #         loss = raw_loss / cfg.training.gradient_accumulate_every
+                        #         loss.backward()
 
-                        # Then print or sort the profiling info
-                        print(prof.key_averages().table(
-                            sort_by="self_cuda_memory_usage", row_limit=200
-                        ))
+                        # # Then print or sort the profiling info
+                        # print(prof.key_averages().table(
+                        #     sort_by="self_cuda_memory_usage", row_limit=200
+                        # ))
 
                         # step optimizer
                         if self.global_step % cfg.training.gradient_accumulate_every == 0:
@@ -247,7 +251,8 @@ class TrainDiffusionWorldModelUnetImageWorkspace(BaseWorkspace):
                     gt_video_path_list = []
                     predict_video_path_list = []
                     with torch.inference_mode():
-                        selected_indices = np.random.choice(len(dataset.replay_buffer.episode_ends), 1, replace=False)
+                        selected_indices = np.random.choice(len(dataset.replay_buffer.episode_ends), cfg.training.num_rollouts, replace=False)
+                        mse_list = []
                         for idx in selected_indices:
                             start_idx = 0 if idx == 0 else dataset.replay_buffer.episode_ends[idx-1]
                             end_idx = dataset.replay_buffer.episode_ends[idx]
@@ -267,6 +272,11 @@ class TrainDiffusionWorldModelUnetImageWorkspace(BaseWorkspace):
                             predict_filename = str(predict_filename) 
                             predict_video_path_list.append(predict_filename)
 
+                            # image trajectory for calcualting mse
+                            gt_image_trajectory = torch.tensor(dataset.replay_buffer['img'][start_idx:start_idx + episode_length], dtype=torch.float32)
+                            predicted_image_trajectory = torch.zeros_like(gt_image_trajectory)
+                            predicted_image_trajectory[:world_model.n_obs_steps] = gt_image_trajectory[:world_model.n_obs_steps]
+
                             # ground truth video
                             self.video_recoder.start(gt_filename)
                             for i in range(episode_length - world_model.n_obs_steps):
@@ -281,25 +291,30 @@ class TrainDiffusionWorldModelUnetImageWorkspace(BaseWorkspace):
                                 "image": torch.tensor(image_history, dtype=torch.float32).to(device).unsqueeze(0)
                             }
                             self.video_recoder.start(predict_filename)
+                            for i in range(world_model.n_obs_steps):
+                                image = dataset.replay_buffer['img'][start_idx + i]
+                                self.video_recoder.write_frame(image.astype(np.uint8))
                             for i in range(episode_length - world_model.n_obs_steps - world_model.n_future_steps):
-                                print(i)
-                                action = dataset.replay_buffer['action'][start_idx + i + world_model.n_obs_steps:start_idx + i + world_model.n_obs_steps + world_model.n_future_steps]
+                                action = dataset.replay_buffer['action'][start_idx + i:start_idx + i + world_model.n_obs_steps + world_model.n_future_steps - 1]
                                 action = torch.tensor(action, dtype=torch.float32).to(device)
                                 predicted_images = world_model.predict_future(predicted_image_history, action)["predicted_future"] # B, T, C, H, W
                                 # append the first predicted image to update predicted_image_history
                                 predicted_image_history['image'] = torch.cat([predicted_image_history['image'][:, 1:], predicted_images], dim=1)
-                                unnormalized_images = normalizer['image'].unnormalize(predicted_images[0]).cpu().detach().numpy()
-                                unnormalized_images = np.moveaxis(unnormalized_images, 1, -1)
-                                unnormalized_images = (unnormalized_images * 255).astype(np.uint8)
+                                unnormalized_images = normalizer['image'].unnormalize(predicted_images[0])
+                                unnormalized_images = torch.moveaxis(unnormalized_images, 1, -1)
+                                predicted_image_trajectory[i + world_model.n_obs_steps + world_model.n_future_steps] = unnormalized_images[0]
+                                unnormalized_images = (unnormalized_images.detach().cpu().numpy() * 255).astype(np.uint8)
                                 self.video_recoder.write_frame(unnormalized_images[0]) # only use the first frame
                             self.video_recoder.stop()
+                        mse_list.append(torch.nn.functional.mse_loss(predicted_image_trajectory, gt_image_trajectory).item())
                     rollout_log = dict()
-                    for video_path in gt_video_path_list:
+                    rollout_log['test_mse'] = np.mean(mse_list)
+                    for i, video_path in enumerate(gt_video_path_list):
                         sim_video = wandb.Video(video_path)
-                        rollout_log['gt_video'] = sim_video
-                    for video_path in predict_video_path_list:
+                        rollout_log[f'gt_video_{i}'] = sim_video
+                    for i, video_path in enumerate(predict_video_path_list):
                         sim_video = wandb.Video(video_path)
-                        rollout_log['predict_video'] = sim_video
+                        rollout_log[f'predict_video_{i}'] = sim_video
                     step_log.update(rollout_log)
 
                 # run validation
@@ -329,12 +344,12 @@ class TrainDiffusionWorldModelUnetImageWorkspace(BaseWorkspace):
                         target_future_images = obs_dict['image'][:,self.model.n_obs_steps:self.model.n_obs_steps+self.model.n_future_steps,...]
                         history_obs_dict = dict_apply(obs_dict, lambda x: x[:,:self.model.n_obs_steps,...])
                         gt_action = batch['action']
-                        future_action = gt_action[:,self.model.n_obs_steps:self.model.n_obs_steps+self.model.n_future_steps,...]
+                        future_action = gt_action[:,:self.model.n_obs_steps+self.model.n_future_steps-1,...]
                         
                         result = world_model.predict_future(history_obs_dict, future_action)
                         pred_future_images = result["predicted_future"]
                         mse = torch.nn.functional.mse_loss(pred_future_images, target_future_images)
-                        step_log['train_action_mse_error'] = mse.item()
+                        step_log['train_pred_image_mse_error'] = mse.item()
                         del batch
                         del obs_dict
                         del gt_action
