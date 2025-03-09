@@ -13,6 +13,7 @@ import torch
 from omegaconf import OmegaConf
 import pathlib
 from torch.utils.data import DataLoader
+from torch.profiler import profile, record_function, ProfilerActivity
 import copy
 import random
 import wandb
@@ -180,9 +181,23 @@ class TrainDiffusionWorldModelUnetImageWorkspace(BaseWorkspace):
                             train_sampling_batch = batch
 
                         # compute loss
-                        raw_loss = self.model.compute_loss(batch)
-                        loss = raw_loss / cfg.training.gradient_accumulate_every
-                        loss.backward()
+
+                        with profile(
+                            activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+                            profile_memory=True,  # <<-- important!
+                            record_shapes=True
+                        ) as prof:
+                            with record_function("model_inference"):
+                                # run your forward pass
+
+                                raw_loss = self.model.compute_loss(batch)
+                                loss = raw_loss / cfg.training.gradient_accumulate_every
+                                loss.backward()
+
+                        # Then print or sort the profiling info
+                        print(prof.key_averages().table(
+                            sort_by="self_cuda_memory_usage", row_limit=200
+                        ))
 
                         # step optimizer
                         if self.global_step % cfg.training.gradient_accumulate_every == 0:

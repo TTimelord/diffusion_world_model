@@ -174,7 +174,7 @@ class DiffusionWorldModelImageUnet(BaseWorldModel):
         nobs = self.normalizer.normalize(batch['obs'])
         nactions = self.normalizer['action'].normalize(batch['action'])
 
-        print(f"After normalizer: {torch.cuda.max_memory_allocated() / 1024 ** 3:.2f} GB")
+        print(f"After normalizer: {torch.cuda.memory_allocated() / 1024 ** 3:.2f} GB")
 
         imgs = nobs['image']
         history_imgs = imgs[:, :self.n_obs_steps]
@@ -207,7 +207,7 @@ class DiffusionWorldModelImageUnet(BaseWorldModel):
         global_cond = torch.concat((nobs_features, action_seq.reshape(B, -1)), dim=-1)
         global_cond = global_cond.view(B, 1, -1)
 
-        print(f"before model: {torch.cuda.max_memory_allocated() / 1024 ** 3:.2f} GB")
+        print(f"before model: {torch.cuda.memory_allocated() / 1024 ** 3:.2f} GB")
 
         print(f"noisy_x: {noisy_x.shape}, global_cond: {global_cond.shape}")
 
