@@ -50,9 +50,7 @@ world_model:
   obs_as_global_cond: ${obs_as_global_cond}
   cond_image_feature_dim: 128
   # crop_shape: null
-  depths: [2,2,2,2]
-  channels: [3,64,64,64]
-  attn_depths: [0,0,0,0]
+  down_dims: [512, 1024, 2048]
 
   # scheduler.step params
   # predict_epsilon: True
@@ -66,14 +64,14 @@ ema:
   max_value: 0.9999
 
 dataloader:
-  batch_size: 16
+  batch_size: 2
   num_workers: 4
   shuffle: True
   pin_memory: True
   persistent_workers: False
 
 val_dataloader:
-  batch_size: 16
+  batch_size: 1
   num_workers: 4
   shuffle: False
   pin_memory: True

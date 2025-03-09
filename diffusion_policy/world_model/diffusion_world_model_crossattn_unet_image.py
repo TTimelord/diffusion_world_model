@@ -13,7 +13,7 @@ from diffusion_policy.common.pytorch_util import dict_apply
 
 # Example diffusion model architecture
 from diffusion_policy.model.diffusion.conditional_unet1d import ConditionalUnet1D
-from diffusion_policy.model.diffusion.conditional_unet2d import ConditionalUNet2D
+from diffusers import UNet2DConditionModel
 
 class DiffusionWorldModelImageUnet(BaseWorldModel):
     """
@@ -30,11 +30,9 @@ class DiffusionWorldModelImageUnet(BaseWorldModel):
                  obs_encoder: MultiImageObsEncoder,
                  n_obs_steps: int,
                  n_future_steps : int = 1,
+                 down_dims=(256,512,1024),
                  num_inference_steps=None,
                  cond_image_feature_dim=128,
-                 depths = [2,2,2,2],
-                 channels= [64,64,64,64],
-                 attn_depths= [0,0,0,0],
                  **kwargs):
         """
         shape_meta:
@@ -60,11 +58,26 @@ class DiffusionWorldModelImageUnet(BaseWorldModel):
 
         global_cond_dim = cond_image_feature_dim + action_dim * self.n_future_steps
 
-        self.model = ConditionalUNet2D(
-            cond_channels = global_cond_dim,
-            depths = depths, 
-            channels = channels, 
-            attn_depths = attn_depths
+        self.model = UNet2DConditionModel(
+            sample_size=shape_meta['obs']['image']['shape'][1:],
+            in_channels=self.n_future_steps*3,                    # For RGB images (default is 4)
+            out_channels=self.n_future_steps*3,                   # RGB output (default is 4)
+            cross_attention_dim=global_cond_dim,          # Match your encoder's feature dimension (default is 1280)
+            attention_head_dim = 1,
+            block_out_channels=(8, 16, 32, 32), 
+            norm_num_groups=4,
+            down_block_types=(
+                "CrossAttnDownBlock2D",       # Custom downsampling blocks
+                "CrossAttnDownBlock2D",
+                "CrossAttnDownBlock2D",
+                "DownBlock2D",
+            ),
+            up_block_types=(
+                "UpBlock2D",                 # Custom upsampling blocks
+                "CrossAttnUpBlock2D",
+                "CrossAttnUpBlock2D",
+                "CrossAttnUpBlock2D",
+            ),
         )
 
         trainable_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
@@ -192,6 +205,7 @@ class DiffusionWorldModelImageUnet(BaseWorldModel):
         this_nobs = dict_apply(condition_obs, lambda x: x.reshape(-1, *x.shape[2:]))
         nobs_features = self.cond_obs_feature_mlp(self.obs_encoder(this_nobs).reshape(B, -1))
         global_cond = torch.concat((nobs_features, action_seq.reshape(B, -1)), dim=-1)
+        global_cond = global_cond.view(B, 1, -1)
 
         print(f"before model: {torch.cuda.memory_allocated() / 1024 ** 3:.2f} GB")
 
@@ -199,9 +213,9 @@ class DiffusionWorldModelImageUnet(BaseWorldModel):
 
         # predict with the model
         model_out = self.model(
-            x=noisy_x,
+            sample=noisy_x,
             timestep=timesteps,
-            cond=global_cond
+            encoder_hidden_states=global_cond
         ).sample
 
         # compute target
