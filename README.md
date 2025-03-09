@@ -1,3 +1,15 @@
+# Diffusion world model
+## Train
+```bash
+python train.py --config-dir=diffusion_policy/config --config-name=train_diffusion_world_model_unet_image_worksapce.yaml training.device=cuda:0
+```
+
+To run a quick debug train:
+```bash
+python train.py --config-dir=diffusion_policy/config --config-name=train_diffusion_world_model_unet_image_worksapce.yaml training.device=cuda:0 training.debug=True
+```
+
+
 # Diffusion Policy
 
 [[Project page]](https://diffusion-policy.cs.columbia.edu/)
