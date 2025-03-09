@@ -46,8 +46,9 @@ world_model:
 
   n_obs_steps: ${n_obs_steps}
   n_future_steps: ${n_future_steps}
-  num_inference_steps: 100
+  num_inference_steps: 10
   obs_as_global_cond: ${obs_as_global_cond}
+  cond_image_feature_dim: 128
   # crop_shape: null
   down_dims: [512, 1024, 2048]
 
@@ -63,14 +64,14 @@ ema:
   max_value: 0.9999
 
 dataloader:
-  batch_size: 64
+  batch_size: 8
   num_workers: 4
   shuffle: True
   pin_memory: True
   persistent_workers: False
 
 val_dataloader:
-  batch_size: 64
+  batch_size: 8
   num_workers: 4
   shuffle: False
   pin_memory: True

@@ -32,6 +32,7 @@ class DiffusionWorldModelImageUnet(BaseWorldModel):
                  n_future_steps : int = 1,
                  down_dims=(256,512,1024),
                  num_inference_steps=None,
+                 cond_image_feature_dim=128,
                  **kwargs):
         """
         shape_meta:
@@ -54,13 +55,17 @@ class DiffusionWorldModelImageUnet(BaseWorldModel):
         # parse action dimension
         action_dim = shape_meta['action']['shape'][0]
         # We'll condition globally on the entire action chunk
-        global_cond_dim = obs_feature_dim * n_obs_steps + action_dim * self.n_future_steps
+
+        global_cond_dim = cond_image_feature_dim + action_dim * self.n_future_steps
 
         self.model = UNet2DConditionModel(
+            sample_size=shape_meta['obs']['image']['shape'][1:],
             in_channels=self.n_future_steps*3,                    # For RGB images (default is 4)
             out_channels=self.n_future_steps*3,                   # RGB output (default is 4)
             cross_attention_dim=global_cond_dim,          # Match your encoder's feature dimension (default is 1280)
-            block_out_channels=(320, 640, 1280, 1280), # Channels for each block (default is same)
+            attention_head_dim = 1,
+            block_out_channels=(8, 16, 32, 32), 
+            norm_num_groups=4,
             down_block_types=(
                 "CrossAttnDownBlock2D",       # Custom downsampling blocks
                 "CrossAttnDownBlock2D",
@@ -75,7 +80,18 @@ class DiffusionWorldModelImageUnet(BaseWorldModel):
             ),
         )
 
+        trainable_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
+        print(f'Trainable parameters in unet: {trainable_params}')
+
         self.obs_encoder = obs_encoder
+
+        trainable_params = sum(p.numel() for p in self.obs_encoder.parameters() if p.requires_grad)
+        print(f'Trainable parameters in resnet: {trainable_params}')
+
+        self.cond_obs_feature_mlp = nn.Sequential(
+            nn.Linear(obs_feature_dim * n_obs_steps, cond_image_feature_dim),
+            nn.ReLU()
+        )
 
         self.noise_scheduler = noise_scheduler
         if num_inference_steps is None:
@@ -96,7 +112,7 @@ class DiffusionWorldModelImageUnet(BaseWorldModel):
         with torch.inference_mode():
             nobs = self.normalizer.normalize(obs_dict)
             nactions = self.normalizer['action'].normalize(action)
-            history_imgs = nobs['ímage']  # shape (B, n_obs_steps, C, H, W)
+            history_imgs = nobs['image']  # shape (B, n_obs_steps, C, H, W)
             action_seq = nactions  # shape (B, n_future_steps, Da)
             device = history_imgs.device
             dtype = history_imgs.dtype
@@ -109,8 +125,9 @@ class DiffusionWorldModelImageUnet(BaseWorldModel):
                 'image': history_imgs,
             }
             this_nobs = dict_apply(condition_obs, lambda x: x.reshape(-1, *x.shape[2:]))
-            nobs_features = self.obs_encoder(this_nobs)
-            global_cond = torch.concat((nobs_features.reshape(B, -1), action_seq.reshape(B, -1)), dim=-1)
+            nobs_features = self.cond_obs_feature_mlp(self.obs_encoder(this_nobs).reshape(B, -1))
+            global_cond = torch.concat((nobs_features, action_seq.reshape(B, -1)), dim=-1)
+            global_cond = global_cond.view(B, 1, -1)
 
             # Start from random noise
             # If you want the model to be deterministic, consider using zero noise
@@ -125,7 +142,7 @@ class DiffusionWorldModelImageUnet(BaseWorldModel):
                     sample=noisy_image,
                     timestep=t,
                     encoder_hidden_states=global_cond
-                )
+                ).sample
                 # diffusion update
                 noisy_image = self.noise_scheduler.step(
                     model_out, t, noisy_image
@@ -157,10 +174,12 @@ class DiffusionWorldModelImageUnet(BaseWorldModel):
         nobs = self.normalizer.normalize(batch['obs'])
         nactions = self.normalizer['action'].normalize(batch['action'])
 
+        print(f"After normalizer: {torch.cuda.max_memory_allocated() / 1024 ** 3:.2f} GB")
+
         imgs = nobs['image']
         history_imgs = imgs[:, :self.n_obs_steps]
         future_imgs = imgs[:, self.n_obs_steps:self.n_obs_steps+self.n_future_steps]
-        action_seq = batch['action'][:, :self.n_obs_steps+self.n_future_steps]
+        action_seq = batch['action'][:, self.n_obs_steps:self.n_obs_steps+self.n_future_steps]
 
         B, T, C, H, W = future_imgs.shape
         assert T == self.n_future_steps, f"Expected n_future_steps={self.n_future_steps}, got {T}."
@@ -184,15 +203,20 @@ class DiffusionWorldModelImageUnet(BaseWorldModel):
             'image': history_imgs,
         }
         this_nobs = dict_apply(condition_obs, lambda x: x.reshape(-1, *x.shape[2:]))
-        nobs_features = self.obs_encoder(this_nobs)
-        global_cond = torch.concat((nobs_features.reshape(B, -1), action_seq.reshape(B, -1)), dim=-1)
+        nobs_features = self.cond_obs_feature_mlp(self.obs_encoder(this_nobs).reshape(B, -1))
+        global_cond = torch.concat((nobs_features, action_seq.reshape(B, -1)), dim=-1)
+        global_cond = global_cond.view(B, 1, -1)
+
+        print(f"before model: {torch.cuda.max_memory_allocated() / 1024 ** 3:.2f} GB")
+
+        print(f"noisy_x: {noisy_x.shape}, global_cond: {global_cond.shape}")
 
         # predict with the model
         model_out = self.model(
             sample=noisy_x,
             timestep=timesteps,
             encoder_hidden_states=global_cond
-        )
+        ).sample
 
         # compute target
         pred_type = self.noise_scheduler.config.prediction_type

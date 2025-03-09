@@ -69,8 +69,8 @@ class TrainDiffusionWorldModelUnetImageWorkspace(BaseWorkspace):
                         crf=22,
                         thread_type='FRAME',
                         thread_count=1
-                    ),
-
+                    )
+        
     def run(self):
         cfg = copy.deepcopy(self.cfg)
 
@@ -243,32 +243,39 @@ class TrainDiffusionWorldModelUnetImageWorkspace(BaseWorkspace):
                             # video_writer
                             gt_filename = pathlib.Path(self.output_dir).joinpath(
                             'media', wv.util.generate_id() + ".mp4")
+                            gt_filename.parent.mkdir(parents=False, exist_ok=True)
+                            gt_filename = str(gt_filename)
                             gt_video_path_list.append(gt_filename)
                             predict_filename = pathlib.Path(self.output_dir).joinpath(
                             'media', wv.util.generate_id() + ".mp4")
+                            predict_filename.parent.mkdir(parents=False, exist_ok=True)
+                            predict_filename = str(predict_filename) 
                             predict_video_path_list.append(predict_filename)
 
                             # ground truth video
                             self.video_recoder.start(gt_filename)
                             for i in range(episode_length - world_model.n_obs_steps):
-                                image = dataset.replay_buffer['img'][start_idx + i]/255
-                                self.video_recoder.write_frame(image)
+                                image = dataset.replay_buffer['img'][start_idx + i]
+                                self.video_recoder.write_frame(image.astype(np.uint8))
                             self.video_recoder.stop()
 
                             # predicted video
                             image_history = dataset.replay_buffer['img'][start_idx + i:start_idx + i + world_model.n_obs_steps]
                             image_history = np.moveaxis(image_history,-1,1)/255
                             predicted_image_history = {
-                                "image": torch.tensor(image_history, dtype=torch.float32).to(device)
+                                "image": torch.tensor(image_history, dtype=torch.float32).to(device).unsqueeze(0)
                             }
                             self.video_recoder.start(predict_filename)
                             for i in range(episode_length - world_model.n_obs_steps - world_model.n_future_steps):
+                                print(i)
                                 action = dataset.replay_buffer['action'][start_idx + i + world_model.n_obs_steps:start_idx + i + world_model.n_obs_steps + world_model.n_future_steps]
                                 action = torch.tensor(action, dtype=torch.float32).to(device)
-                                predicted_images = world_model.predict_future(predicted_image_history, action)["predicted_future"]
+                                predicted_images = world_model.predict_future(predicted_image_history, action)["predicted_future"] # B, T, C, H, W
                                 # append the first predicted image to update predicted_image_history
-                                predicted_image_history['image'] = torch.cat([predicted_image_history['image'][1:], predicted_images[0].unsqueeze(0)], dim=0)
-                                unnormalized_images = normalizer['image'].unnormalize(predicted_images).cpu().detach().numpy()
+                                predicted_image_history['image'] = torch.cat([predicted_image_history['image'][:, 1:], predicted_images], dim=1)
+                                unnormalized_images = normalizer['image'].unnormalize(predicted_images[0]).cpu().detach().numpy()
+                                unnormalized_images = np.moveaxis(unnormalized_images, 1, -1)
+                                unnormalized_images = (unnormalized_images * 255).astype(np.uint8)
                                 self.video_recoder.write_frame(unnormalized_images[0]) # only use the first frame
                             self.video_recoder.stop()
                     rollout_log = dict()

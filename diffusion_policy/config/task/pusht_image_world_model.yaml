@@ -7,9 +7,9 @@ shape_meta: &shape_meta
     image:
       shape: *image_shape
       type: rgb
-    agent_pos:
-      shape: [2]
-      type: low_dim
+    # agent_pos:
+    #   shape: [2]
+    #   type: low_dim
   action:
     shape: [2]
 
@@ -34,6 +34,7 @@ dataset:
   zarr_path: data/pusht/pusht_cchi_v7_replay.zarr
   pad_before: 4
   pad_after: 0
+  horizon: ${horizon}
   seed: 42
   val_ratio: 0.02
   max_train_episodes: 90
