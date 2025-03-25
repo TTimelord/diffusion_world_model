@@ -333,51 +333,52 @@ class TrainDiffusionWorldModelUnetKeypointWorkspace(BaseWorkspace):
                             step_log['val_loss'] = val_loss
 
                 # run diffusion sampling on a training batch
-                if (self.epoch % cfg.training.sample_every) == 0:
-                    with torch.no_grad():
-                        # sample trajectory from training set, and evaluate difference
-                        batch = dict_apply(train_sampling_batch, lambda x: x.to(device, non_blocking=True))
-                        obs_dict = batch['obs']
-                        target_future_keyps = obs_dict['keypoint'][:,self.model.n_obs_steps:self.model.n_obs_steps+self.model.n_future_steps,...]
-                        history_obs_dict = dict_apply(obs_dict, lambda x: x[:,:self.model.n_obs_steps,...])
-                        gt_action = batch['action']
-                        future_action = gt_action[:,:self.model.n_obs_steps+self.model.n_future_steps-1,...]
+                # if (self.epoch % cfg.training.sample_every) == 0:
+                #     with torch.no_grad():
+                #         # sample trajectory from training set, and evaluate difference
+                #         batch = dict_apply(train_sampling_batch, lambda x: x.to(device, non_blocking=True))
+                #         obs_dict = batch['obs']
+                #         print('keypoint', obs_dict.shape)
+                #         target_future_keyps = obs_dict[:,self.model.n_obs_steps:self.model.n_obs_steps+self.model.n_future_steps,...]
+                #         history_obs_dict = dict_apply(obs_dict, lambda x: x[:,:self.model.n_obs_steps,...])
+                #         gt_action = batch['action']
+                #         future_action = gt_action[:,:self.model.n_obs_steps+self.model.n_future_steps-1,...]
                         
-                        result = world_model.predict_future(history_obs_dict, future_action)
-                        pred_future_keyps = result["predicted_future"]
-                        mse = torch.nn.functional.mse_loss(pred_future_keyps, target_future_keyps)
-                        step_log['train_pred_image_mse_error'] = mse.item()
-                        del batch
-                        del obs_dict
-                        del gt_action
-                        del result
-                        del future_action
-                        del mse
-                        del target_future_keyps
-                        del history_obs_dict
-                        del pred_future_keyps
+                #         result = world_model.predict_future(history_obs_dict, future_action)
+                #         pred_future_keyps = result["predicted_future"]
+                #         mse = torch.nn.functional.mse_loss(pred_future_keyps, target_future_keyps)
+                #         step_log['train_pred_image_mse_error'] = mse.item()
+                #         del batch
+                #         del obs_dict
+                #         del gt_action
+                #         del result
+                #         del future_action
+                #         del mse
+                #         del target_future_keyps
+                #         del history_obs_dict
+                #         del pred_future_keyps
                 
                 # checkpoint
-                if (self.epoch % cfg.training.checkpoint_every) == 0:
-                    # checkpointing
-                    if cfg.checkpoint.save_last_ckpt:
-                        self.save_checkpoint()
-                    if cfg.checkpoint.save_last_snapshot:
-                        self.save_snapshot()
+                # if (self.epoch % cfg.training.checkpoint_every) == 0:
+                #     # checkpointing
+                #     if cfg.checkpoint.save_last_ckpt:
+                #         self.save_checkpoint()
+                #     if cfg.checkpoint.save_last_snapshot:
+                #         self.save_snapshot()
 
-                    # sanitize metric names
-                    metric_dict = dict()
-                    for key, value in step_log.items():
-                        new_key = key.replace('/', '_')
-                        metric_dict[new_key] = value
+                #     # sanitize metric names
+                #     metric_dict = dict()
+                #     for key, value in step_log.items():
+                #         new_key = key.replace('/', '_')
+                #         metric_dict[new_key] = value
                     
-                    # We can't copy the last checkpoint here
-                    # since save_checkpoint uses threads.
-                    # therefore at this point the file might have been empty!
-                    topk_ckpt_path = topk_manager.get_ckpt_path(metric_dict)
+                #     # We can't copy the last checkpoint here
+                #     # since save_checkpoint uses threads.
+                #     # therefore at this point the file might have been empty!
+                #     topk_ckpt_path = topk_manager.get_ckpt_path(metric_dict)
 
-                    if topk_ckpt_path is not None:
-                        self.save_checkpoint(path=topk_ckpt_path)
+                #     if topk_ckpt_path is not None:
+                #         self.save_checkpoint(path=topk_ckpt_path)
                 # ========= eval end for this epoch ==========
                 world_model.train()
 

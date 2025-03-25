@@ -58,32 +58,32 @@ class DiffusionWorldModelKeypointUnet(BaseWorldModel):
         # get keypoint shape
         keypoint_size = shape_meta['obs']['keypoint']['shape'][-1]
 
-        self.diffusion_step_encoder = nn.Sequential(
-            SinusoidalPosEmb(cond_channels),
-            nn.Linear(cond_channels, cond_channels * 4),
-            nn.Mish(),
-            nn.Linear(cond_channels * 4, cond_channels),
-        )
-        self.act_proj = nn.Sequential(
-            nn.Linear(action_dim * (n_obs_steps+n_future_steps-1), cond_channels),
-            nn.SiLU(),
-            nn.Linear(cond_channels, cond_channels),
-        )
+        # self.diffusion_step_encoder = nn.Sequential(
+        #     SinusoidalPosEmb(cond_channels),
+        #     nn.Linear(cond_channels, cond_channels * 4),
+        #     nn.Mish(),
+        #     nn.Linear(cond_channels * 4, cond_channels),
+        # )
+        # self.act_proj = nn.Sequential(
+        #     nn.Linear(action_dim * (n_obs_steps+n_future_steps-1), cond_channels),
+        #     nn.SiLU(),
+        #     nn.Linear(cond_channels, cond_channels),
+        # )
         self.cond_proj = nn.Sequential(
             nn.Linear(cond_channels, cond_channels),
             nn.SiLU(),
             nn.Linear(cond_channels, cond_channels),
         )
-        self.dense_in = nn.Linear(keypoint_size, unet_dims[0])
+        # self.dense_in = nn.Linear(keypoint_size, 64)
 
         self.unet = ConditionalUnet1D(
-            input_dim=action_dim,
-            global_cond_dim=keypoint_size,
+            input_dim=n_obs_steps + n_future_steps,
+            global_cond_dim=action_dim*n_obs_steps,
             diffusion_step_embed_dim=cond_channels
         )
 
-        self.norm_out = GroupNorm(unet_dims[-1])
-        self.dense_out = nn.Linear(unet_dims[-1], keypoint_size)
+        # self.norm_out = GroupNorm(unet_dims[-1])
+        # self.dense_out = nn.Linear(unet_dims[-1], keypoint_size)
         # nn.init.zeros_(self.conv_out.weight)
 
         trainable_params = sum(p.numel() for p in self.unet.parameters() if p.requires_grad)
@@ -140,9 +140,10 @@ class DiffusionWorldModelKeypointUnet(BaseWorldModel):
                 timesteps = t[None].to(device)
                 timesteps = timesteps.expand(noisy_keyp.shape[0])
 
-                cond = self.cond_proj(self.diffusion_step_encoder(timesteps) + self.act_proj(action_seq))
-                x = self.dense_in(torch.cat((history_keyp, noisy_keyp), dim=1))
-                x, _, _ = self.unet(x, cond)
+                # cond = self.cond_proj(self.diffusion_step_encoder(timesteps) + self.act_proj(action_seq))
+                # print('cond', cond.shape)
+                x = torch.cat((history_keyp, noisy_keyp), dim=1)
+                x, _, _ = self.unet(x, timesteps, global_cond=action_seq)
                 x = self.dense_out(F.silu(self.norm_out(x)))
                 # diffusion update
                 noisy_keyp = self.noise_scheduler.step(
@@ -200,12 +201,12 @@ class DiffusionWorldModelKeypointUnet(BaseWorldModel):
 
         # condition
         action_seq = action_seq.reshape(B, -1)
-        cond = self.cond_proj(self.diffusion_step_encoder(timesteps) + self.act_proj(action_seq))
-        x = self.dense_in(torch.cat((history_keyps, noisy_x), dim=1).reshape(self.TT * B, -1))
-        print(x.shape)
-        print(x.view((B, self.TT, -1)).shape, timesteps.shape, cond.shape)
-        x, _, _ = self.unet(x.view((B, self.TT, -1)), timesteps, global_cond=cond)
-        x = self.dense_out(F.silu(self.norm_out(x)))
+        # print('history_keyp', history_keyps.shape)
+        # print('noisy_keyp', noisy_x.shape)
+        x = torch.cat((history_keyps, noisy_x), dim=1)
+        # print('x', x.shape)
+        x = self.unet(x.transpose(1, 2), timesteps, global_cond=action_seq).transpose(1, 2)
+        # x = self.dense_out(F.silu(self.norm_out(x)))
 
         # compute target
         pred_type = self.noise_scheduler.config.prediction_type

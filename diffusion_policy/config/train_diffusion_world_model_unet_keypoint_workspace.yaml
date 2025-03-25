@@ -28,7 +28,7 @@ world_model:
     beta_schedule: squaredcos_cap_v2
     variance_type: fixed_small # Yilun's paper uses fixed_small_log instead, but easy to cause Nan
     clip_sample: True # required when predict_epsilon=False
-    prediction_type: epsilon # or sample
+    prediction_type: sample # or sample
 
   obs_encoder:
     _target_: diffusion_policy.model.vision.multi_image_obs_encoder.MultiImageObsEncoder
@@ -50,7 +50,7 @@ world_model:
   obs_as_global_cond: ${obs_as_global_cond}
   # crop_shape: null
   cond_channels: 256
-  unet_dims: [64, 128, 256]
+  unet_dims: [256, 512, 1024]
 
   # scheduler.step params
   # predict_epsilon: True
@@ -64,14 +64,14 @@ ema:
   max_value: 0.9999
 
 dataloader:
-  batch_size: 32
+  batch_size: 256
   num_workers: 4
   shuffle: True
   pin_memory: True
   persistent_workers: False
 
 val_dataloader:
-  batch_size: 32
+  batch_size: 256
   num_workers: 4
   shuffle: False
   pin_memory: True
