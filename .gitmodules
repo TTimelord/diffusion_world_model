@@ -1,0 +1,3 @@
+[submodule "escnn"]
+	path = escnn
+	url = git@github.com:QUVA-Lab/escnn.git

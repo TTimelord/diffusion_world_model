@@ -15,6 +15,7 @@ from diffusion_policy.common.pytorch_util import dict_apply
 from diffusion_policy.model.diffusion.conditional_unet1d import ConditionalUnet1D
 from diffusion_policy.model.diffusion.conditional_unet2d import ConditionalUNet2D, FourierFeatures, Conv3x3, GroupNorm
 from diffusion_policy.model.diffusion.positional_embedding import SinusoidalPosEmb
+from diffusion_policy.model.equi.equi_obs_autoencoder import EquivariantObsEnc, 
 
 class DiffusionWorldModelImageUnet(BaseWorldModel):
     """
@@ -28,7 +29,6 @@ class DiffusionWorldModelImageUnet(BaseWorldModel):
     def __init__(self,
                  shape_meta: dict,
                  noise_scheduler: DDPMScheduler,
-                 obs_encoder: MultiImageObsEncoder,
                  n_obs_steps: int,
                  n_future_steps : int = 1,
                  num_inference_steps=None,
@@ -36,6 +36,7 @@ class DiffusionWorldModelImageUnet(BaseWorldModel):
                  depths = [2,2,2,2],
                  channels= [64,64,64,64],
                  attn_depths= [0,0,0,0],
+                 N=8,
                  **kwargs):
         """
         shape_meta:
@@ -58,6 +59,15 @@ class DiffusionWorldModelImageUnet(BaseWorldModel):
 
         # get img channels
         img_channels = shape_meta['obs']['image']['shape'][0]
+
+        self.enc = EquivariantObsEnc(
+            obs_shape=shape_meta['obs']['image']['shape'], 
+            crop_shape=shape_meta['obs']['image']['shape'][1:], 
+            out_channel=channels[0], 
+            N=N
+        )  # 12x12
+
+        self.dec = 
 
         self.diffusion_step_encoder = nn.Sequential(
             SinusoidalPosEmb(cond_channels),
