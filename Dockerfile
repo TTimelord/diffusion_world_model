@@ -12,9 +12,9 @@ RUN apt-get update && apt-get install -y \
     libglu1-mesa-dev \
     python3-dev \
     build-essential \
-    git \
-    vim \
-    wget \
+    # git \
+    # vim \
+    # wget \
     ca-certificates \
     swig \
     && rm -rf /var/lib/apt/lists/*

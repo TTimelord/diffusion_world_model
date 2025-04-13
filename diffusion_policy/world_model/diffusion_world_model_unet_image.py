@@ -15,7 +15,7 @@ from diffusion_policy.common.pytorch_util import dict_apply
 from diffusion_policy.model.diffusion.conditional_unet1d import ConditionalUnet1D
 from diffusion_policy.model.diffusion.conditional_unet2d import ConditionalUNet2D, FourierFeatures, Conv3x3, GroupNorm
 from diffusion_policy.model.diffusion.positional_embedding import SinusoidalPosEmb
-from diffusion_policy.model.equi.equi_obs_autoencoder import EquivariantObsEnc, 
+from diffusion_policy.model.equi.equi_obs_autoencoder import EquivariantObsEnc, EquivariantObsDec
 
 class DiffusionWorldModelImageUnet(BaseWorldModel):
     """
@@ -60,43 +60,47 @@ class DiffusionWorldModelImageUnet(BaseWorldModel):
         # get img channels
         img_channels = shape_meta['obs']['image']['shape'][0]
 
-        self.enc = EquivariantObsEnc(
+        self.encoder = EquivariantObsEnc(
             obs_shape=shape_meta['obs']['image']['shape'], 
             crop_shape=shape_meta['obs']['image']['shape'][1:], 
-            out_channel=channels[0], 
+            lats_channel=channels[0], 
             N=N
         )  # 12x12
-
-        self.dec = 
-
+        
+        #TODO: make this equivariant
         self.diffusion_step_encoder = nn.Sequential(
             SinusoidalPosEmb(cond_channels),
             nn.Linear(cond_channels, cond_channels * 4),
             nn.Mish(),
             nn.Linear(cond_channels * 4, cond_channels),
         )
+        #TODO: make this equivariant
         self.act_proj = nn.Sequential(
             nn.Linear(action_dim * (n_obs_steps+n_future_steps-1), cond_channels),
             nn.SiLU(),
             nn.Linear(cond_channels, cond_channels),
         )
+        #TODO: make this equivariant
         self.cond_proj = nn.Sequential(
             nn.Linear(cond_channels, cond_channels),
             nn.SiLU(),
             nn.Linear(cond_channels, cond_channels),
         )
-        self.conv_in = Conv3x3((n_obs_steps + n_future_steps) * img_channels, channels[0])
-
+        #TODO: make this equivariant
         self.unet = ConditionalUNet2D(
             cond_channels = cond_channels,
             depths = depths, 
             channels = channels, 
             attn_depths = attn_depths
         )
-
+        #TODO: make this equivariant
         self.norm_out = GroupNorm(channels[0])
-        self.conv_out = Conv3x3(channels[0], img_channels)
-        nn.init.zeros_(self.conv_out.weight)
+        
+        self.decoder = EquivariantObsDec(
+            lats_channel=channels[-1],
+            obs_channel=img_channels,
+            N=N,
+        )
 
         trainable_params = sum(p.numel() for p in self.unet.parameters() if p.requires_grad)
         print(f'Trainable parameters in unet: {trainable_params}')
@@ -132,34 +136,41 @@ class DiffusionWorldModelImageUnet(BaseWorldModel):
 
             B, To, C, H, W = history_imgs.shape
             assert To == self.n_obs_steps, f"Expected n_obs_steps={self.n_obs_steps}, got {To}."
+            
+            encoded_histories = self.encoder(history_imgs).tensor  # --> (B, T, channels[0], 12, 12)
+            
+            B, To, C, H, W = encoded_histories.shape
 
             # Start from random noise
             # If you want the model to be deterministic, consider using zero noise
-            noisy_image = torch.randn((B, self.n_future_steps * C, H, W), device=device, dtype=dtype)
+            noisy_lats = torch.randn((B, self.n_future_steps * C, H, W), device=device, dtype=dtype)
 
             # set up timesteps
             self.noise_scheduler.set_timesteps(self.num_inference_steps, device=device)
 
             # reshape
-            history_imgs = history_imgs.view(B, self.n_obs_steps * C, H, W)
+            encoded_histories = encoded_histories.view(B, self.n_obs_steps * C, H, W)
             action_seq = action_seq.view(B, -1)
 
             for t in self.noise_scheduler.timesteps:
                 # forward the model
                 if torch.is_tensor(t) and len(t.shape) == 0:
                     timesteps = t[None].to(device)
-                timesteps = timesteps.expand(noisy_image.shape[0])
+                timesteps = timesteps.expand(noisy_lats.shape[0])
 
                 cond = self.cond_proj(self.diffusion_step_encoder(timesteps) + self.act_proj(action_seq))
-                x = self.conv_in(torch.cat((history_imgs, noisy_image), dim=1))
+                x = torch.cat((encoded_histories, noisy_lats), dim=1)
                 x, _, _ = self.unet(x, cond)
-                x = self.conv_out(F.silu(self.norm_out(x)))
+                x = F.silu(self.norm_out(x))
+                
                 # diffusion update
-                noisy_image = self.noise_scheduler.step(
-                    x, t, noisy_image
+                noisy_lats = self.noise_scheduler.step(
+                    x, t, noisy_lats
                 ).prev_sample
+            
+            predicted = self.decoder(rearrange(noisy_lats, 'b (t c) h w -> b t c h w', b=B)).tensor
 
-            predicted = noisy_image.view(B, self.n_future_steps, C, H, W)
+            # predicted = noisy_lats.view(B, self.n_future_steps, C, H, W)
 
         return {
             "predicted_future": predicted
@@ -191,36 +202,41 @@ class DiffusionWorldModelImageUnet(BaseWorldModel):
 
         B, T, C, H, W = future_imgs.shape
         assert T == self.n_future_steps, f"Expected n_future_steps={self.n_future_steps}, got {T}."
-
+        
         # flatten images
-        x_0 = future_imgs.view(B, self.n_future_steps * C, H, W)
-        history_imgs = history_imgs.view(B, self.n_obs_steps * C, H, W)
+        # x_0 = future_imgs.view(B, self.n_future_steps * C, H, W)
+        # history_imgs = history_imgs.view(B, self.n_obs_steps * C, H, W)
+        
+        encoded_gt = self.encoder(future_imgs).tensor
+        encoded_his = self.encoder(history_imgs).tensor
 
         # sample random timesteps for each sample
         timesteps = torch.randint(
             0, self.noise_scheduler.config.num_train_timesteps,
-            (B,), device=x_0.device
+            (B,), device=encoded_gt.device
         ).long()
 
         # noise
-        noise = torch.randn_like(x_0, device=x_0.device)
+        noise = torch.randn_like(encoded_gt, device=encoded_gt.device)
 
         # forward diffusion
-        noisy_x = self.noise_scheduler.add_noise(x_0, noise, timesteps)
+        noisy_gt = self.noise_scheduler.add_noise(encoded_gt, noise, timesteps)
 
         # condition
         action_seq = action_seq.reshape(B, -1)
         cond = self.cond_proj(self.diffusion_step_encoder(timesteps) + self.act_proj(action_seq))
-        x = self.conv_in(torch.cat((history_imgs, noisy_x), dim=1))
+        x = torch.cat((rearrange(encoded_his, 'b t c h w -> b (t c) h w'), noisy_gt), dim=1)
         x, _, _ = self.unet(x, cond)
-        x = self.conv_out(F.silu(self.norm_out(x)))
+        x = F.silu(self.norm_out(x))
+        x = self.decoder(rearrange(x, 'b (t c) h w -> b t c h w', b=B)).tensor
+        
 
         # compute target
         pred_type = self.noise_scheduler.config.prediction_type
         if pred_type == 'epsilon':
             target = noise
         elif pred_type == 'sample':
-            target = x_0
+            target = future_imgs
         else:
             raise ValueError(f"Unsupported prediction type {pred_type}")
 
