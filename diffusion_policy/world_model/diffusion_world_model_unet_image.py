@@ -150,9 +150,10 @@ class DiffusionWorldModelImageUnet(BaseWorldModel):
                 ).prev_sample
 
             predicted = noisy_image.view(B, self.n_future_steps, C, H, W)
+            unnormalized_predicted = self.normalizer['image'].unnormalize(predicted)
 
         return {
-            "predicted_future": predicted
+            "predicted_future": unnormalized_predicted
         }
 
     def set_normalizer(self, normalizer: LinearNormalizer):

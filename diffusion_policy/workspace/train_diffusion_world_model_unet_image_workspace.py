@@ -273,7 +273,7 @@ class TrainDiffusionWorldModelUnetImageWorkspace(BaseWorkspace):
                             predict_video_path_list.append(predict_filename)
 
                             # image trajectory for calcualting mse
-                            gt_image_trajectory = torch.tensor(dataset.replay_buffer['img'][start_idx:start_idx + episode_length], dtype=torch.float32)
+                            gt_image_trajectory = torch.tensor(dataset.replay_buffer['img'][start_idx:start_idx + episode_length], dtype=torch.float32)/255
                             predicted_image_trajectory = torch.zeros_like(gt_image_trajectory)
                             predicted_image_trajectory[:world_model.n_obs_steps] = gt_image_trajectory[:world_model.n_obs_steps]
 
@@ -285,7 +285,7 @@ class TrainDiffusionWorldModelUnetImageWorkspace(BaseWorkspace):
                             self.video_recoder.stop()
 
                             # predicted video
-                            image_history = dataset.replay_buffer['img'][start_idx + i:start_idx + i + world_model.n_obs_steps]
+                            image_history = dataset.replay_buffer['img'][start_idx:start_idx + world_model.n_obs_steps]
                             image_history = np.moveaxis(image_history,-1,1)/255
                             predicted_image_history = {
                                 "image": torch.tensor(image_history, dtype=torch.float32).to(device).unsqueeze(0)
@@ -300,7 +300,7 @@ class TrainDiffusionWorldModelUnetImageWorkspace(BaseWorkspace):
                                 predicted_images = world_model.predict_future(predicted_image_history, action)["predicted_future"] # B, T, C, H, W
                                 # append the first predicted image to update predicted_image_history
                                 predicted_image_history['image'] = torch.cat([predicted_image_history['image'][:, 1:], predicted_images], dim=1)
-                                unnormalized_images = normalizer['image'].unnormalize(predicted_images[0])
+                                unnormalized_images = predicted_images[0]
                                 unnormalized_images = torch.moveaxis(unnormalized_images, 1, -1)
                                 predicted_image_trajectory[i + world_model.n_obs_steps + world_model.n_future_steps] = unnormalized_images[0]
                                 unnormalized_images = (unnormalized_images.detach().cpu().numpy() * 255).astype(np.uint8)
@@ -350,6 +350,15 @@ class TrainDiffusionWorldModelUnetImageWorkspace(BaseWorkspace):
                         pred_future_images = result["predicted_future"]
                         mse = torch.nn.functional.mse_loss(pred_future_images, target_future_images)
                         step_log['train_pred_image_mse_error'] = mse.item()
+                        # log predicted and ground truth future images
+                        pred_images = (pred_future_images[0].cpu().numpy() * 255).astype(np.uint8)
+                        pred_images = np.moveaxis(pred_images, 1, -1)
+                        gt_images = (target_future_images[0].cpu().numpy() * 255).astype(np.uint8)
+                        gt_images = np.moveaxis(gt_images, 1, -1)
+                        pred_wandb_img = wandb.Image(pred_images[0], caption="Predicted future image")
+                        gt_wandb_img = wandb.Image(gt_images[0], caption="Ground truth future image")
+                        step_log['train_pred_future_image'] = pred_wandb_img
+                        step_log['train_gt_future_image'] = gt_wandb_img
                         del batch
                         del obs_dict
                         del gt_action
