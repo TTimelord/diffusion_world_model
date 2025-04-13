@@ -26,6 +26,7 @@ RUN conda env create -f conda_environment.yaml
 SHELL ["conda", "run", "-n", "robodiff", "/bin/bash", "-c"]
 
 RUN pip install -e ./escnn
+RUN pip install huggingface_hub==0.14.1
 
 
 # docker run -it --name diffusion_world_model -v $(pwd):/diffusion_world_model diffusion_wm_docker_img bash

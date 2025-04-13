@@ -123,7 +123,7 @@ class TrainDiffusionWorldModelUnetImageWorkspace(BaseWorkspace):
         #     cfg.task.env_runner,
         #     output_dir=self.output_dir)
         # assert isinstance(env_runner, BaseImageRunner)
-
+        
         # configure logging
         wandb_run = wandb.init(
             dir=str(self.output_dir),

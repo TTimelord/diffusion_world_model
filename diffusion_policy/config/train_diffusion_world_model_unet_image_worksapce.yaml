@@ -51,7 +51,7 @@ world_model:
   # crop_shape: null
   cond_channels: 256
   depths: [2,2,2,2]
-  channels: [64,64,64,64]
+  channels: [64, 64, 64, 64]
   attn_depths: [0,0,0,0]
 
   # scheduler.step params
@@ -139,7 +139,7 @@ hydra:
   job:
     override_dirname: ${name}
   run:
-    dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
+    dir: data/output/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
   sweep:
-    dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
+    dir: data/output/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
     subdir: ${hydra.job.num}

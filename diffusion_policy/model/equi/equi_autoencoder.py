@@ -60,7 +60,7 @@ class EquiResBlock(torch.nn.Module):
         return out
     
 class EquivariantResEncoder(torch.nn.Module):
-    def __init__(self, in_channels: int = 2, n_out: int = 128, initialize: bool = True, N=8):
+    def __init__(self, in_channels: int = 2, n_out: int = 64, initialize: bool = True, N=8):
         super().__init__()
         self.in_channels = in_channels
         self.group = gspaces.rot2dOnR2(N)
@@ -68,25 +68,25 @@ class EquivariantResEncoder(torch.nn.Module):
             # 96x96
             nn.R2Conv(
                 nn.FieldType(self.group, in_channels * [self.group.trivial_repr]),
-                nn.FieldType(self.group, n_out // 8 * [self.group.regular_repr]),
+                nn.FieldType(self.group, n_out // 4 * [self.group.regular_repr]),
                 kernel_size=3,
                 stride=2,
                 padding=1,
                 initialize=initialize,
             ),
             # 48x48
-            nn.ReLU(nn.FieldType(self.group, n_out // 8 * [self.group.regular_repr]), inplace=True),
+            nn.ReLU(nn.FieldType(self.group, n_out // 4 * [self.group.regular_repr]), inplace=True),
             # EquiResBlock(self.group, self.in_channels, n_out // 8, initialize=True),
             # EquiResBlock(self.group, n_out // 8, n_out // 8, initialize=True),
             # nn.PointwiseMaxPool(nn.FieldType(self.group, n_out // 8 * [self.group.regular_repr]), 2),
             # # 48x48
-            EquiResBlock(self.group, n_out // 8, n_out // 4, initialize=True),
-            EquiResBlock(self.group, n_out // 4, n_out // 4, initialize=True),
-            nn.PointwiseMaxPool(nn.FieldType(self.group, n_out // 4 * [self.group.regular_repr]), 2),
-            # 24x24
             EquiResBlock(self.group, n_out // 4, n_out // 2, initialize=True),
             EquiResBlock(self.group, n_out // 2, n_out // 2, initialize=True),
             nn.PointwiseMaxPool(nn.FieldType(self.group, n_out // 2 * [self.group.regular_repr]), 2),
+            # 24x24
+            EquiResBlock(self.group, n_out // 2, n_out, initialize=True),
+            EquiResBlock(self.group, n_out, n_out, initialize=True),
+            nn.PointwiseMaxPool(nn.FieldType(self.group, n_out * [self.group.regular_repr]), 2),
             # 12x12
         )
 

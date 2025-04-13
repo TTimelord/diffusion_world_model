@@ -67,6 +67,7 @@ class DiffusionWorldModelImageUnet(BaseWorldModel):
             N=N
         )  # 12x12
         
+        self.conv_in = Conv3x3((n_obs_steps + n_future_steps) * channels[0] * N, channels[0])
         #TODO: make this equivariant
         self.diffusion_step_encoder = nn.Sequential(
             SinusoidalPosEmb(cond_channels),
@@ -94,7 +95,8 @@ class DiffusionWorldModelImageUnet(BaseWorldModel):
             attn_depths = attn_depths
         )
         #TODO: make this equivariant
-        self.norm_out = GroupNorm(channels[0])
+        self.norm_out = GroupNorm(channels[-1])
+        self.conv_out = Conv3x3(channels[-1], channels[-1]*N*n_future_steps)
         
         self.decoder = EquivariantObsDec(
             lats_channel=channels[-1],
@@ -137,7 +139,7 @@ class DiffusionWorldModelImageUnet(BaseWorldModel):
             B, To, C, H, W = history_imgs.shape
             assert To == self.n_obs_steps, f"Expected n_obs_steps={self.n_obs_steps}, got {To}."
             
-            encoded_histories = self.encoder(history_imgs).tensor  # --> (B, T, channels[0], 12, 12)
+            encoded_histories = self.encoder(history_imgs)  # --> (B, T, channels[0], 12, 12)
             
             B, To, C, H, W = encoded_histories.shape
 
@@ -159,16 +161,15 @@ class DiffusionWorldModelImageUnet(BaseWorldModel):
                 timesteps = timesteps.expand(noisy_lats.shape[0])
 
                 cond = self.cond_proj(self.diffusion_step_encoder(timesteps) + self.act_proj(action_seq))
-                x = torch.cat((encoded_histories, noisy_lats), dim=1)
+                x = self.conv_in(torch.cat((encoded_histories, noisy_lats), dim=1))
                 x, _, _ = self.unet(x, cond)
-                x = F.silu(self.norm_out(x))
+                x = self.conv_out(F.silu(self.norm_out(x)))
                 
                 # diffusion update
                 noisy_lats = self.noise_scheduler.step(
                     x, t, noisy_lats
                 ).prev_sample
-            
-            predicted = self.decoder(rearrange(noisy_lats, 'b (t c) h w -> b t c h w', b=B)).tensor
+            predicted = self.decoder(rearrange(noisy_lats, 'b (t c) h w -> b t c h w', t=self.n_future_steps))
 
             # predicted = noisy_lats.view(B, self.n_future_steps, C, H, W)
 
@@ -207,8 +208,8 @@ class DiffusionWorldModelImageUnet(BaseWorldModel):
         # x_0 = future_imgs.view(B, self.n_future_steps * C, H, W)
         # history_imgs = history_imgs.view(B, self.n_obs_steps * C, H, W)
         
-        encoded_gt = self.encoder(future_imgs).tensor
-        encoded_his = self.encoder(history_imgs).tensor
+        encoded_gt = rearrange(self.encoder(future_imgs), 'b t c h w -> b (t c) h w')
+        encoded_his = rearrange(self.encoder(history_imgs), 'b t c h w -> b (t c) h w')
 
         # sample random timesteps for each sample
         timesteps = torch.randint(
@@ -225,14 +226,14 @@ class DiffusionWorldModelImageUnet(BaseWorldModel):
         # condition
         action_seq = action_seq.reshape(B, -1)
         cond = self.cond_proj(self.diffusion_step_encoder(timesteps) + self.act_proj(action_seq))
-        x = torch.cat((rearrange(encoded_his, 'b t c h w -> b (t c) h w'), noisy_gt), dim=1)
+        x = self.conv_in(torch.cat((encoded_his, noisy_gt), dim=1))
         x, _, _ = self.unet(x, cond)
-        x = F.silu(self.norm_out(x))
-        x = self.decoder(rearrange(x, 'b (t c) h w -> b t c h w', b=B)).tensor
+        x = self.conv_out(F.silu(self.norm_out(x)))
+        x = self.decoder(rearrange(x, 'b (t c) h w -> b t c h w', t=self.n_future_steps))
         
 
         # compute target
-        pred_type = self.noise_scheduler.config.prediction_type
+        pred_type = 'sample' #self.noise_scheduler.config.prediction_type
         if pred_type == 'epsilon':
             target = noise
         elif pred_type == 'sample':
