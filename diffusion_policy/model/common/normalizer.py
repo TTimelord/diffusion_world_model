@@ -275,6 +275,7 @@ def _normalize(x, params, forward=True):
     else:
         x = (x - offset) / scale
     x = x.reshape(src_shape)
+    # x = x.clamp(min=params['input_stats']['min'], max=params['input_stats']['max'])
     return x
 
 

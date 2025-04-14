@@ -1,6 +1,10 @@
 from escnn import gspaces, nn
 import torch
 
+NUM_CHANNEL_1 = 8
+NUM_CHANNEL_2 = 16
+
+
 class EquiResBlock(torch.nn.Module):
     def __init__(
         self,
@@ -46,6 +50,8 @@ class EquiResBlock(torch.nn.Module):
             self.upscale = nn.SequentialModule(
                 nn.R2Conv(feat_type_in, feat_type_hid, kernel_size=1, stride=stride, bias=False, initialize=initialize),
             )
+        
+        self.batch_norm = nn.IIDBatchNorm2d(feat_type_hid)
 
     def forward(self, xx: nn.GeometricTensor) -> nn.GeometricTensor:
         residual = xx
@@ -55,45 +61,50 @@ class EquiResBlock(torch.nn.Module):
             out += self.upscale(residual)
         else:
             out += residual
-        out = self.relu(out)
+        out = self.relu(self.batch_norm(out))
 
         return out
     
-class EquivariantResEncoder(torch.nn.Module):
-    def __init__(self, in_channels: int = 2, n_out: int = 64, initialize: bool = True, N=8):
-        super().__init__()
+class EquivResEnc96to24(torch.nn.Module):
+    def __init__(self, in_channels: int = 3, out_channels: int = 3, initialize: bool = True, N=8):
+        super(EquivResEnc96to24, self).__init__()
         self.in_channels = in_channels
         self.group = gspaces.rot2dOnR2(N)
         self.conv = torch.nn.Sequential(
-            # 96x96
+            # 3x96x96
             nn.R2Conv(
                 nn.FieldType(self.group, in_channels * [self.group.trivial_repr]),
-                nn.FieldType(self.group, n_out // 4 * [self.group.regular_repr]),
+                nn.FieldType(self.group, NUM_CHANNEL_1 * [self.group.regular_repr]),
                 kernel_size=3,
-                stride=2,
+                stride=1,
                 padding=1,
                 initialize=initialize,
             ),
-            # 48x48
-            nn.ReLU(nn.FieldType(self.group, n_out // 4 * [self.group.regular_repr]), inplace=True),
-            # EquiResBlock(self.group, self.in_channels, n_out // 8, initialize=True),
-            # EquiResBlock(self.group, n_out // 8, n_out // 8, initialize=True),
-            # nn.PointwiseMaxPool(nn.FieldType(self.group, n_out // 8 * [self.group.regular_repr]), 2),
-            # # 48x48
-            EquiResBlock(self.group, n_out // 4, n_out // 2, initialize=True),
-            EquiResBlock(self.group, n_out // 2, n_out // 2, initialize=True),
-            nn.PointwiseMaxPool(nn.FieldType(self.group, n_out // 2 * [self.group.regular_repr]), 2),
-            # 24x24
-            EquiResBlock(self.group, n_out // 2, n_out, initialize=True),
-            EquiResBlock(self.group, n_out, n_out, initialize=True),
-            nn.PointwiseMaxPool(nn.FieldType(self.group, n_out * [self.group.regular_repr]), 2),
-            # 12x12
+            # 32x48x48
+            nn.ReLU(nn.FieldType(self.group, NUM_CHANNEL_1 * [self.group.regular_repr]), inplace=True),
+            EquiResBlock(self.group, NUM_CHANNEL_1, NUM_CHANNEL_2, initialize=True),
+            EquiResBlock(self.group, NUM_CHANNEL_2, NUM_CHANNEL_2, initialize=True),
+            nn.PointwiseMaxPool(nn.FieldType(self.group, NUM_CHANNEL_2 * [self.group.regular_repr]), 2),
+            # 64x48x48
+            EquiResBlock(self.group, NUM_CHANNEL_2, NUM_CHANNEL_2, initialize=True),
+            EquiResBlock(self.group, NUM_CHANNEL_2, NUM_CHANNEL_1, initialize=True),    
+            nn.PointwiseMaxPool(nn.FieldType(self.group, NUM_CHANNEL_1 * [self.group.regular_repr]), 2),
+            # 32x24x24
+            nn.R2Conv(
+                nn.FieldType(self.group, NUM_CHANNEL_1 * [self.group.regular_repr]),
+                nn.FieldType(self.group, out_channels * [self.group.regular_repr]),
+                kernel_size=3,
+                stride=1,
+                padding=1,
+                initialize=initialize,
+            )
+            # 3x24x24
         )
 
-    def forward(self, x) -> nn.GeometricTensor:
+    def forward(self, x) -> torch.Tensor:
         if type(x) is torch.Tensor:
             x = nn.GeometricTensor(x, nn.FieldType(self.group, self.in_channels * [self.group.trivial_repr]))
-        return self.conv(x)
+        return self.conv(x).tensor
     
 
 class EquiResUpBlock(torch.nn.Module):
@@ -144,6 +155,8 @@ class EquiResUpBlock(torch.nn.Module):
                     initialize=initialize
                 )
             )
+            
+        self.batch_norm = nn.IIDBatchNorm2d(feat_type_out)
         
         self.relu = nn.ReLU(feat_type_out, inplace=True)
         self.out_type = feat_type_out
@@ -157,27 +170,35 @@ class EquiResUpBlock(torch.nn.Module):
         else:
             shortcut = x_upsampled
         out = out + shortcut
+        out = self.batch_norm(out)
         out = self.relu(out)
         return out
 
 
-class EquivariantResDecoder(torch.nn.Module):
-    def __init__(self, in_channels: int = 64, out_channels: int = 3, initialize: bool = True, N: int = 8):
-        super(EquivariantResDecoder, self).__init__()
+class EquivResDec24to96(torch.nn.Module):
+    def __init__(self, in_channels: int = 3, out_channels: int = 3, initialize: bool = True, N: int = 8):
+        super(EquivResDec24to96, self).__init__()
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.group = gspaces.rot2dOnR2(N)
         
         self.up_blocks = torch.nn.Sequential(
-            # 12x12
-            EquiResUpBlock(self.group, in_channels, in_channels // 2, initialize=initialize),
-            # 24x24
-            EquiResUpBlock(self.group, in_channels // 2, in_channels // 4, initialize=initialize),
-            # 48x48
-            EquiResUpBlock(self.group, in_channels // 4, in_channels // 4, initialize=initialize),
-            # 96x96
+            # 3x24x24
             nn.R2Conv(
-                nn.FieldType(self.group, in_channels // 4 * [self.group.regular_repr]),
+                nn.FieldType(self.group, in_channels * [self.group.regular_repr]),
+                nn.FieldType(self.group, NUM_CHANNEL_1 * [self.group.regular_repr]),
+                kernel_size=3,
+                stride=1,
+                padding=1,
+                initialize=initialize,
+            ),
+            # 32x24x24
+            EquiResUpBlock(self.group, NUM_CHANNEL_1, NUM_CHANNEL_2, initialize=initialize),
+            # 64x48x48
+            EquiResUpBlock(self.group, NUM_CHANNEL_2, NUM_CHANNEL_1, initialize=initialize),
+            # 64x96x96
+            nn.R2Conv(
+                nn.FieldType(self.group, NUM_CHANNEL_1 * [self.group.regular_repr]),
                 nn.FieldType(self.group, out_channels * [self.group.trivial_repr]),
                 kernel_size=1,
                 stride=1,
@@ -185,10 +206,210 @@ class EquivariantResDecoder(torch.nn.Module):
                 bias=True,
                 initialize=initialize
             ),
-            nn.ReLU(nn.FieldType(self.group, out_channels * [self.group.trivial_repr]), inplace=True),
         )
+        self.sigmoid = torch.nn.Sigmoid()
         
-    def forward(self, x: nn.GeometricTensor) -> nn.GeometricTensor:
+    def forward(self, x) -> torch.Tensor:
         if type(x) is torch.Tensor:
             x = nn.GeometricTensor(x, nn.FieldType(self.group, self.in_channels * [self.group.regular_repr]))
+        # return self.sigmoid(self.up_blocks(x).tensor)
+        return self.up_blocks(x).tensor
+    
+    
+    
+    
+####################################################################################################################################################
+####################################################### Not Equivariant Version ####################################################################
+class ResBlock(torch.nn.Module):
+    def __init__(
+        self,
+        in_channels: int,
+        out_channels: int,
+        kernel_size: int = 3,
+        stride: int = 1,
+    ):
+        super(ResBlock, self).__init__()
+
+        self.layer1 = torch.nn.Sequential(
+            torch.nn.Conv2d(
+                in_channels,
+                out_channels,
+                kernel_size=kernel_size,
+                padding=(kernel_size - 1) // 2,
+                stride=stride,
+            ),
+            torch.nn.ReLU(inplace=True),
+        )
+
+        self.layer2 = torch.nn.Sequential(
+            torch.nn.Conv2d(
+                out_channels,
+                out_channels,
+                kernel_size=kernel_size,
+                padding=(kernel_size - 1) // 2,
+                stride=1
+            ),
+        )
+
+        self.upscale = None
+        if in_channels != out_channels or stride != 1:
+            self.upscale = torch.nn.Sequential(
+                torch.nn.Conv2d(
+                    in_channels, 
+                    out_channels, 
+                    kernel_size=1, 
+                    stride=stride, 
+                    bias=False, 
+                ),
+            )
+        self.relu = torch.nn.ReLU(inplace=True)
+        self.batch_norm = torch.nn.BatchNorm2d(out_channels)
+
+    def forward(self, xx: torch.Tensor) -> torch.Tensor:
+        residual = xx
+        out = self.layer1(xx)
+        out = self.layer2(out)
+        if self.upscale:
+            out += self.upscale(residual)
+        else:
+            out += residual
+        out = self.relu(self.batch_norm(out))
+
+        return out
+    
+class ResEnc96to24(torch.nn.Module):
+    def __init__(self, in_channels: int = 3, out_channels: int = 3,):
+        super(ResEnc96to24, self).__init__()
+        self.in_channels = in_channels
+        self.conv = torch.nn.Sequential(
+            # 3x96x96
+            torch.nn.Conv2d(
+                in_channels,
+                NUM_CHANNEL_1,
+                kernel_size=3,
+                stride=1,
+                padding=1,
+            ),
+            # 32x48x48
+            torch.nn.ReLU(inplace=True),
+            ResBlock(NUM_CHANNEL_1, NUM_CHANNEL_2),
+            ResBlock(NUM_CHANNEL_2, NUM_CHANNEL_2),
+            torch.nn.MaxPool2d(
+                kernel_size=2,
+                stride=2,
+            ),
+            # 64x48x48
+            ResBlock(NUM_CHANNEL_2, NUM_CHANNEL_2),
+            ResBlock(NUM_CHANNEL_2, NUM_CHANNEL_1),    
+            torch.nn.MaxPool2d(
+                kernel_size=2,
+                stride=2,
+            ),
+            # 32x24x24
+            torch.nn.Conv2d(
+                NUM_CHANNEL_1,
+                out_channels,
+                kernel_size=3,
+                stride=1,
+                padding=1,
+            )
+            # 3x24x24
+        )
+
+    def forward(self, x) -> torch.Tensor:
+        return self.conv(x)
+    
+
+class ResUpBlock(torch.nn.Module):
+    def __init__(self, in_channels, out_channels, kernel_size=3, scale_factor=2):
+        super(ResUpBlock, self).__init__()
+        
+        self.upsample = torch.nn.Upsample(
+            scale_factor=scale_factor,
+            mode='bilinear',
+            align_corners=True
+        )
+        
+        self.layer1 = torch.nn.Sequential(
+            torch.nn.Conv2d(
+                in_channels=in_channels,
+                out_channels=out_channels,
+                kernel_size=kernel_size,
+                stride=1,
+                padding=(kernel_size - 1) // 2,
+            ),
+            torch.nn.ReLU(inplace=True)
+        )
+        
+        self.layer2 = torch.nn.Sequential(
+            torch.nn.Conv2d(
+                in_channels=out_channels,
+                out_channels=out_channels,
+                kernel_size=kernel_size,
+                stride=1,
+                padding=(kernel_size - 1) // 2,
+            ),
+        )
+        
+        self.skip = None
+        if in_channels != out_channels:
+            self.skip = torch.nn.Sequential(
+                torch.nn.Conv2d(
+                    in_channels=in_channels,
+                    out_channels=out_channels,
+                    kernel_size=1,
+                    stride=1,
+                    padding=0,
+                    bias=False
+                ),
+            )
+            
+        self.batch_norm = torch.nn.BatchNorm2d(out_channels)
+        self.relu = torch.nn.ReLU(inplace=True)
+        
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x_upsampled = self.upsample(x)
+        out = self.layer1(x_upsampled)
+        out = self.layer2(out)
+        if self.skip is not None:
+            shortcut = self.skip(x_upsampled)
+        else:
+            shortcut = x_upsampled
+        out = out + shortcut
+        out = self.batch_norm(out)
+        out = self.relu(out)
+        return out
+
+
+class ResDec24to96(torch.nn.Module):
+    def __init__(self, in_channels: int = 3, out_channels: int = 3):
+        super(ResDec24to96, self).__init__()
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        
+        self.up_blocks = torch.nn.Sequential(
+            # 3x24x24
+            torch.nn.Conv2d(
+                in_channels=in_channels,
+                out_channels=NUM_CHANNEL_1,
+                kernel_size=3,
+                stride=1,
+                padding=1,
+            ),
+            # 32x24x24
+            ResUpBlock(NUM_CHANNEL_1, NUM_CHANNEL_2),
+            # 64x48x48
+            ResUpBlock(NUM_CHANNEL_2, NUM_CHANNEL_1),
+            # 64x96x96
+            torch.nn.Conv2d(
+                in_channels=NUM_CHANNEL_1,
+                out_channels=out_channels,
+                kernel_size=1,
+                stride=1,
+                padding=0,
+            ),
+        )
+        self.sigmoid = torch.nn.Sigmoid()
+        
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.up_blocks(x)

@@ -139,9 +139,9 @@ class DiffusionWorldModelImageUnet(BaseWorldModel):
             B, To, C, H, W = history_imgs.shape
             assert To == self.n_obs_steps, f"Expected n_obs_steps={self.n_obs_steps}, got {To}."
             
-            encoded_histories = self.encoder(history_imgs)  # --> (B, T, channels[0], 12, 12)
+            encoded_his = self.encoder(history_imgs)  # --> (B, T, channels[0], 12, 12)
             
-            B, To, C, H, W = encoded_histories.shape
+            B, To, C, H, W = encoded_his.shape
 
             # Start from random noise
             # If you want the model to be deterministic, consider using zero noise
@@ -151,7 +151,7 @@ class DiffusionWorldModelImageUnet(BaseWorldModel):
             self.noise_scheduler.set_timesteps(self.num_inference_steps, device=device)
 
             # reshape
-            encoded_histories = encoded_histories.view(B, self.n_obs_steps * C, H, W)
+            encoded_his = encoded_his.view(B, self.n_obs_steps * C, H, W)
             action_seq = action_seq.view(B, -1)
 
             for t in self.noise_scheduler.timesteps:
@@ -161,7 +161,7 @@ class DiffusionWorldModelImageUnet(BaseWorldModel):
                 timesteps = timesteps.expand(noisy_lats.shape[0])
 
                 cond = self.cond_proj(self.diffusion_step_encoder(timesteps) + self.act_proj(action_seq))
-                x = self.conv_in(torch.cat((encoded_histories, noisy_lats), dim=1))
+                x = self.conv_in(torch.cat((encoded_his, noisy_lats), dim=1))
                 x, _, _ = self.unet(x, cond)
                 x = self.conv_out(F.silu(self.norm_out(x)))
                 
@@ -169,9 +169,8 @@ class DiffusionWorldModelImageUnet(BaseWorldModel):
                 noisy_lats = self.noise_scheduler.step(
                     x, t, noisy_lats
                 ).prev_sample
-            predicted = self.decoder(rearrange(noisy_lats, 'b (t c) h w -> b t c h w', t=self.n_future_steps))
 
-            # predicted = noisy_lats.view(B, self.n_future_steps, C, H, W)
+            predicted = noisy_lats.view(B, self.n_future_steps, C, H, W)
 
         return {
             "predicted_future": predicted
@@ -233,7 +232,7 @@ class DiffusionWorldModelImageUnet(BaseWorldModel):
         
 
         # compute target
-        pred_type = 'sample' #self.noise_scheduler.config.prediction_type
+        pred_type = self.noise_scheduler.config.prediction_type
         if pred_type == 'epsilon':
             target = noise
         elif pred_type == 'sample':
