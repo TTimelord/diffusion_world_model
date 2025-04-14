@@ -25,7 +25,7 @@ class BaseWorldModel(ModuleAttrMixin, nn.Module):
         self.shape_meta = shape_meta
         self.kwargs = kwargs
 
-    def predict_future(self, obs_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+    def predict_future(self, obs_dict: Dict[str, torch.Tensor], action) -> Dict[str, torch.Tensor]:
         """
         Compute the predicted future.
 
