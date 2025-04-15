@@ -114,7 +114,7 @@ class DiffusionWorldModelKeypointUnet(BaseWorldModel):
         with torch.inference_mode():
             nobs = self.normalizer.normalize(obs_dict)
             nactions = self.normalizer['action'].normalize(action)
-            history_keyp = nobs['keypoint']  # shape (B, n_obs_steps, C, H, W)
+            history_keyp = nobs['obs']
             action_seq = nactions  # shape (B, n_future_steps, Da)
             device = history_keyp.device
             dtype = history_keyp.dtype
@@ -142,13 +142,12 @@ class DiffusionWorldModelKeypointUnet(BaseWorldModel):
 
                 # cond = self.cond_proj(self.diffusion_step_encoder(timesteps) + self.act_proj(action_seq))
                 # print('cond', cond.shape)
-                x = torch.cat((history_keyp, noisy_keyp), dim=1)
-                x, _, _ = self.unet(x, timesteps, global_cond=action_seq)
-                x = self.dense_out(F.silu(self.norm_out(x)))
+                x = torch.cat((history_keyp, noisy_keyp), dim=1).transpose(2, 1)
+                x = self.unet(x, timesteps, global_cond=action_seq)
                 # diffusion update
                 noisy_keyp = self.noise_scheduler.step(
-                    x, t, noisy_keyp
-                ).prev_sample
+                    x.transpose(2, 1), t, noisy_keyp
+                ).prev_sample[:, -self.n_future_steps:, :]
 
             predicted = noisy_keyp.view(B, self.n_future_steps, S)
 
