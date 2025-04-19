@@ -1,9 +1,6 @@
 from escnn import gspaces, nn
 import torch
 
-NUM_CHANNEL_1 = 8
-NUM_CHANNEL_2 = 16
-
 
 class EquiResBlock(torch.nn.Module):
     def __init__(
@@ -66,7 +63,14 @@ class EquiResBlock(torch.nn.Module):
         return out
     
 class EquivResEnc96to24(torch.nn.Module):
-    def __init__(self, in_channels: int = 3, out_channels: int = 3, initialize: bool = True, N=8):
+    def __init__(self, 
+                 in_channels: int = 3, 
+                 out_channels: int = 3, 
+                 initialize: bool = True, 
+                 N=8,
+                 NUM_CHANNEL_1=32,
+                 NUM_CHANNEL_2=64
+                 ):
         super(EquivResEnc96to24, self).__init__()
         self.in_channels = in_channels
         self.group = gspaces.rot2dOnR2(N)
@@ -97,7 +101,8 @@ class EquivResEnc96to24(torch.nn.Module):
                 stride=1,
                 padding=1,
                 initialize=initialize,
-            )
+            ),
+            nn.ReLU(nn.FieldType(self.group, out_channels * [self.group.regular_repr]), inplace=True),
             # 3x24x24
         )
 
@@ -176,7 +181,14 @@ class EquiResUpBlock(torch.nn.Module):
 
 
 class EquivResDec24to96(torch.nn.Module):
-    def __init__(self, in_channels: int = 3, out_channels: int = 3, initialize: bool = True, N: int = 8):
+    def __init__(self, 
+                 in_channels: int = 3, 
+                 out_channels: int = 3, 
+                 initialize: bool = True,
+                 N: int = 8,
+                 NUM_CHANNEL_1=32,
+                 NUM_CHANNEL_2=64
+                 ):
         super(EquivResDec24to96, self).__init__()
         self.in_channels = in_channels
         self.out_channels = out_channels
@@ -207,12 +219,12 @@ class EquivResDec24to96(torch.nn.Module):
                 initialize=initialize
             ),
         )
-        self.sigmoid = torch.nn.Sigmoid()
+        self.tanh = torch.nn.Tanh()
         
     def forward(self, x) -> torch.Tensor:
         if type(x) is torch.Tensor:
             x = nn.GeometricTensor(x, nn.FieldType(self.group, self.in_channels * [self.group.regular_repr]))
-        # return self.sigmoid(self.up_blocks(x).tensor)
+        return self.tanh(self.up_blocks(x).tensor)
         return self.up_blocks(x).tensor
     
     
@@ -278,7 +290,12 @@ class ResBlock(torch.nn.Module):
         return out
     
 class ResEnc96to24(torch.nn.Module):
-    def __init__(self, in_channels: int = 3, out_channels: int = 3,):
+    def __init__(self, 
+                 in_channels: int = 3, 
+                 out_channels: int = 3,
+                 NUM_CHANNEL_1=32,
+                 NUM_CHANNEL_2=64
+                 ):
         super(ResEnc96to24, self).__init__()
         self.in_channels = in_channels
         self.conv = torch.nn.Sequential(
@@ -312,8 +329,9 @@ class ResEnc96to24(torch.nn.Module):
                 kernel_size=3,
                 stride=1,
                 padding=1,
-            )
+            ),
             # 3x24x24
+            torch.nn.ReLU(inplace=True),
         )
 
     def forward(self, x) -> torch.Tensor:
@@ -382,10 +400,13 @@ class ResUpBlock(torch.nn.Module):
 
 
 class ResDec24to96(torch.nn.Module):
-    def __init__(self, in_channels: int = 3, out_channels: int = 3):
+    def __init__(self, 
+                 in_channels: int = 3, 
+                 out_channels: int = 3,
+                 NUM_CHANNEL_1=32,
+                 NUM_CHANNEL_2=64
+                 ):
         super(ResDec24to96, self).__init__()
-        self.in_channels = in_channels
-        self.out_channels = out_channels
         
         self.up_blocks = torch.nn.Sequential(
             # 3x24x24
@@ -408,8 +429,8 @@ class ResDec24to96(torch.nn.Module):
                 stride=1,
                 padding=0,
             ),
+            torch.nn.Tanh(),
         )
-        self.sigmoid = torch.nn.Sigmoid()
         
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.up_blocks(x)

@@ -2,7 +2,7 @@ defaults:
   - _self_
   - task: pusht_image_world_model
 
-name: train_diffusion_world_model_unet_image
+name: TrainEquivariantAutoencoder
 _target_: diffusion_policy.workspace.train_equivariant_autoencoder_workspace.TrainEquivariantAutoencoderWorkspace
 
 task_name: ${task.name}
@@ -15,53 +15,13 @@ horizon: ${eval:'${n_obs_steps}+${n_future_steps}'}
 dataset_obs_steps: ${n_obs_steps}
 obs_as_global_cond: True
 
-# world_model:
-#   _target_: diffusion_policy.model.equi.equi_obs_autoencoder.EquivariantAutoencoder
-
-#   shape_meta: ${shape_meta}
-  
-#   noise_scheduler:
-#     _target_: diffusers.schedulers.scheduling_ddpm.DDPMScheduler
-#     num_train_timesteps: 100
-#     beta_start: 0.0001
-#     beta_end: 0.02
-#     beta_schedule: squaredcos_cap_v2
-#     variance_type: fixed_small # Yilun's paper uses fixed_small_log instead, but easy to cause Nan
-#     clip_sample: True # required when predict_epsilon=False
-#     prediction_type: sample # epsilon or sample
-
-#   obs_encoder:
-#     _target_: diffusion_policy.model.vision.multi_image_obs_encoder.MultiImageObsEncoder
-#     shape_meta: ${shape_meta}
-#     rgb_model:
-#       _target_: diffusion_policy.model.vision.model_getter.get_resnet
-#       name: resnet18
-#       weights: null
-#     resize_shape: null
-#     # constant center crop
-#     random_crop: False
-#     use_group_norm: True
-#     share_rgb_model: False
-#     imagenet_norm: True
-
-#   n_obs_steps: ${n_obs_steps}
-#   n_future_steps: ${n_future_steps}
-#   num_inference_steps: 100
-#   obs_as_global_cond: ${obs_as_global_cond}
-#   # crop_shape: null
-#   cond_channels: 256
-#   depths: [2,2,2,2]
-#   channels: [64, 64, 64, 64]
-#   attn_depths: [0,0,0,0]
-
-#   # scheduler.step params
-#   # predict_epsilon: True
-
 autoencoder:
   _target_: diffusion_policy.model.equi.equi_obs_autoencoder.EquivariantAutoencoder
   obs_channels: 3
-  lats_channels: 3
-  N: 8
+  lats_channels: 1
+  NUM_CHANNEL_1: 32
+  NUM_CHANNEL_2: 64
+  N: 4
 
 ema:
   _target_: diffusion_policy.model.diffusion.ema_model.EMAModel
@@ -72,7 +32,7 @@ ema:
   max_value: 0.9999
 
 dataloader:
-  batch_size: 64
+  batch_size: 32
   num_workers: 16
   shuffle: True
   pin_memory: True
@@ -97,10 +57,11 @@ training:
   seed: 42
   debug: False
   resume: True
+  ckpt_tag: 'latest'
   # optimization
   lr_scheduler: cosine
   lr_warmup_steps: 500
-  num_epochs: 300
+  num_epochs: 1000
   gradient_accumulate_every: 1
   # EMA destroys performance when used with BatchNorm
   # replace BatchNorm with GroupNorm.
@@ -133,7 +94,7 @@ checkpoint:
     monitor_key: val_loss
     mode: min
     k: 5
-    format_str: 'epoch={epoch:04d}-val_loss={val_loss:.3f}.ckpt'
+    format_str: 'epoch={epoch:04d}-val_loss={val_loss:.6f}.ckpt'
   save_last_ckpt: True
   save_last_snapshot: False
 
@@ -145,7 +106,7 @@ hydra:
   job:
     override_dirname: ${name}
   run:
-    dir: data/output/equiautoencoder/
+    dir: data/output/EquivariantAutoencoder/${autoencoder.lats_channels}_${autoencoder.NUM_CHANNEL_1}_${autoencoder.NUM_CHANNEL_2}/
   sweep:
-    dir: data/output/equiautoencoder/
+    dir: data/output/EquivariantAutoencoder/${autoencoder.lats_channels}_${autoencoder.NUM_CHANNEL_1}_${autoencoder.NUM_CHANNEL_2}/
     subdir: ${hydra.job.num}

@@ -67,7 +67,8 @@ class TrainAutoencoderWorkspace(BaseWorkspace):
 
         # resume training
         if cfg.training.resume:
-            lastest_ckpt_path = self.get_checkpoint_path()
+            tag = cfg.training.ckpt_tag if 'ckpt_tag' in cfg.training else 'latest'
+            lastest_ckpt_path = self.get_checkpoint_path(tag)
             if lastest_ckpt_path.is_file():
                 print(f"Resuming from checkpoint {lastest_ckpt_path}")
                 self.load_checkpoint(path=lastest_ckpt_path)
@@ -235,7 +236,6 @@ class TrainAutoencoderWorkspace(BaseWorkspace):
                                 'media', f"{self.epoch}_train_gt_{wv.util.generate_id()}.jpg"))
                                 save_image(reconstructions[idx], pathlib.Path(self.output_dir).joinpath(
                                 'media', f"{self.epoch}_train_reconstruct_{wv.util.generate_id()}.jpg"))
-                                
                                 reconstruct_wandb_img = wandb.Image(reconstructions[idx])
                                 gt_wandb_img = wandb.Image(gt)
                                 step_log[f'train gt {idx}'] = gt_wandb_img
@@ -251,77 +251,6 @@ class TrainAutoencoderWorkspace(BaseWorkspace):
                 if cfg.training.use_ema:
                     world_model = self.ema_model
                 world_model.eval()
-
-                # # run rollout
-                # if (self.epoch % cfg.training.rollout_every) == 0:
-                #     gt_img_path_list = []
-                #     reconstruct_img_path_list = []
-                #     with torch.inference_mode():
-                #         selected_indices = np.random.choice(len(dataset.replay_buffer.episode_ends), cfg.training.num_rollouts, replace=False)
-                #         mse_list = []
-                #         for idx in selected_indices:
-                #             start_idx = 0 if idx == 0 else dataset.replay_buffer.episode_ends[idx-1]
-                #             end_idx = dataset.replay_buffer.episode_ends[idx]
-                #             episode_length = end_idx - start_idx
-                #             if episode_length < world_model.n_obs_steps + world_model.n_future_steps:
-                #                 continue
-
-                #             # video_writer
-                #             gt_filename = pathlib.Path(self.output_dir).joinpath(
-                #             'media', f"{self.epoch}_gt_{wv.util.generate_id()}.jpg")
-                #             gt_filename.parent.mkdir(parents=False, exist_ok=True)
-                #             gt_filename = str(gt_filename)
-                #             gt_img_path_list.append(gt_filename)
-                #             predict_filename = pathlib.Path(self.output_dir).joinpath(
-                #             'media', f"{self.epoch}_reconstruct_{wv.util.generate_id()}.jpg")
-                #             predict_filename.parent.mkdir(parents=False, exist_ok=True)
-                #             predict_filename = str(predict_filename) 
-                #             reconstruct_img_path_list.append(predict_filename)
-
-                #             # image trajectory for calcualting mse
-                #             gt_image_trajectory = torch.tensor(dataset.replay_buffer['img'][start_idx:start_idx + episode_length], dtype=torch.float32)
-                #             predicted_image_trajectory = torch.zeros_like(gt_image_trajectory)
-                #             predicted_image_trajectory[:world_model.n_obs_steps] = gt_image_trajectory[:world_model.n_obs_steps]
-
-                #             # ground truth video
-                #             self.video_recoder.start(gt_filename)
-                #             for i in range(episode_length - world_model.n_obs_steps):
-                #                 image = dataset.replay_buffer['img'][start_idx + i]
-                #                 self.video_recoder.write_frame(image.astype(np.uint8))
-                #             self.video_recoder.stop()
-
-                #             # predicted video
-                #             image_history = dataset.replay_buffer['img'][start_idx + i:start_idx + i + world_model.n_obs_steps]
-                #             image_history = np.moveaxis(image_history,-1,1)/255
-                #             predicted_image_history = {
-                #                 "image": torch.tensor(image_history, dtype=torch.float32).to(device).unsqueeze(0)
-                #             }
-                #             self.video_recoder.start(predict_filename)
-                #             for i in range(world_model.n_obs_steps):
-                #                 image = dataset.replay_buffer['img'][start_idx + i]
-                #                 self.video_recoder.write_frame(image.astype(np.uint8))
-                #             for i in range(episode_length - world_model.n_obs_steps - world_model.n_future_steps):
-                #                 action = dataset.replay_buffer['action'][start_idx + i:start_idx + i + world_model.n_obs_steps + world_model.n_future_steps - 1]
-                #                 action = torch.tensor(action, dtype=torch.float32).to(device)
-                #                 predicted_images = world_model.predict_future(predicted_image_history, action)["predicted_future"] # B, T, C, H, W
-                #                 # append the first predicted image to update predicted_image_history
-                #                 predicted_image_history['image'] = torch.cat([predicted_image_history['image'][:, 1:], predicted_images], dim=1)
-                #                 unnormalized_images = normalizer['image'].unnormalize(predicted_images[0])
-                #                 unnormalized_images = torch.moveaxis(unnormalized_images, 1, -1)
-                #                 predicted_image_trajectory[i + world_model.n_obs_steps + world_model.n_future_steps] = unnormalized_images[0]
-                #                 unnormalized_images = (unnormalized_images.detach().cpu().numpy() * 255).astype(np.uint8)
-                #                 self.video_recoder.write_frame(unnormalized_images[0]) # only use the first frame
-                #             self.video_recoder.stop()
-                #         mse_list.append(torch.nn.functional.mse_loss(predicted_image_trajectory, gt_image_trajectory).item())
-                #     rollout_log = dict()
-                #     rollout_log['test_mse'] = np.mean(mse_list)
-                #     for i, video_path in enumerate(gt_video_path_list):
-                #         sim_video = wandb.Video(video_path)
-                #         rollout_log[f'gt_video_{i}'] = sim_video
-                #     for i, video_path in enumerate(predict_video_path_list):
-                #         sim_video = wandb.Video(video_path)
-                #         rollout_log[f'predict_video_{i}'] = sim_video
-                #     step_log.update(rollout_log)
 
                 # run validation
                 if (self.epoch % cfg.training.val_every) == 0:

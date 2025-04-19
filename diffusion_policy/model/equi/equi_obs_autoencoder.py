@@ -16,16 +16,17 @@ from diffusion_policy.model.common.normalizer import LinearNormalizer
 
 
 class EquivariantAutoencoder(ModuleAttrMixin):
-    def __init__(
-        self,
-        obs_channels=3,
-        lats_channels=3,
-        N=8,
-        initialize=True,
-    ):
+    def __init__(self,
+                 obs_channels=3,
+                 lats_channels=3,
+                 N=8,
+                 initialize=True,
+                 NUM_CHANNEL_1=32,
+                 NUM_CHANNEL_2=64
+                 ):
         super().__init__()
-        self.encoder = EquivResEnc96to24(obs_channels, lats_channels, initialize, N)
-        self.decoder = EquivResDec24to96(lats_channels, obs_channels, initialize, N)
+        self.encoder = EquivResEnc96to24(obs_channels, lats_channels, initialize, N, NUM_CHANNEL_1, NUM_CHANNEL_2)
+        self.decoder = EquivResDec24to96(lats_channels, obs_channels, initialize, N, NUM_CHANNEL_1, NUM_CHANNEL_2)
         self.normalizer = LinearNormalizer()
     
     def encode(self, obs):
@@ -60,14 +61,15 @@ class EquivariantAutoencoder(ModuleAttrMixin):
         
         
 class Autoencoder(ModuleAttrMixin):
-    def __init__(
-        self,
-        obs_channels=3,
-        lats_channels=3,
-    ):
+    def __init__(self,
+                 obs_channels=3,
+                 lats_channels=3,
+                 NUM_CHANNEL_1=32,
+                 NUM_CHANNEL_2=64
+                 ):
         super().__init__()
-        self.encoder = ResEnc96to24(obs_channels, lats_channels)
-        self.decoder = ResDec24to96(lats_channels, obs_channels)
+        self.encoder = ResEnc96to24(obs_channels, lats_channels, NUM_CHANNEL_1, NUM_CHANNEL_2)
+        self.decoder = ResDec24to96(lats_channels, obs_channels, NUM_CHANNEL_1, NUM_CHANNEL_2)
         self.normalizer = LinearNormalizer()
     
     def encode(self, obs):
