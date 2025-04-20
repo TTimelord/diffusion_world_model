@@ -24,7 +24,7 @@ class PushTLowdimDataset(BaseLowdimDataset):
             ):
         super().__init__()
         self.replay_buffer = ReplayBuffer.copy_from_path(
-            zarr_path, keys=[obs_key, state_key, action_key])
+            zarr_path, keys=[obs_key, state_key, action_key, 'img'])
 
         val_mask = get_val_mask(
             n_episodes=self.replay_buffer.n_episodes, 
@@ -86,6 +86,7 @@ class PushTLowdimDataset(BaseLowdimDataset):
         data = {
             'obs': obs, # T, D_o
             'action': sample[self.action_key], # T, D_a
+            'image': sample['img']
         }
         return data
 

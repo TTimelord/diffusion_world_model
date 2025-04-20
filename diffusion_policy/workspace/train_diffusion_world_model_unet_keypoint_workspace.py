@@ -19,12 +19,13 @@ import random
 import wandb
 import wandb.sdk.data_types.video as wv
 import tqdm
+from tqdm import trange
 import numpy as np
 import shutil
 from diffusion_policy.workspace.base_workspace import BaseWorkspace
-from diffusion_policy.world_model.diffusion_world_model_unet_image import DiffusionWorldModelImageUnet
+from diffusion_policy.world_model.diffusion_world_model_unet_keypoint import DiffusionWorldModelKeypointUnet
 from diffusion_policy.dataset.base_dataset import BaseImageDataset
-from diffusion_policy.dataset.pusht_image_dataset import PushTImageDataset
+from diffusion_policy.dataset.pusht_dataset import PushTLowdimDataset
 from diffusion_policy.env_runner.base_image_runner import BaseImageRunner
 from diffusion_policy.common.checkpoint_util import TopKCheckpointManager
 from diffusion_policy.common.json_logger import JsonLogger
@@ -33,9 +34,39 @@ from diffusion_policy.model.diffusion.ema_model import EMAModel
 from diffusion_policy.model.common.lr_scheduler import get_scheduler
 from diffusion_policy.gym_util.video_recording_wrapper import VideoRecordingWrapper, VideoRecorder
 
+import matplotlib.pyplot as plt
+from PIL import Image
+import io
+import torchvision.transforms.functional as TF
+
+# Make an image from keyopints using matplotlib
+def keypoint_to_image(keypoints):
+    point_x = []
+    point_y = []
+    if len(keypoints.shape) == 1:
+        for i in range(keypoints.shape[0] // 2):
+            point_x.append(keypoints[2 * i])
+            point_y.append(keypoints[2 * i + 1])
+    else:
+        for i in range(keypoints.shape[0]):
+            point_x.append(keypoints[i][0])
+            point_y.append(keypoints[i][1])
+
+    plt.scatter(point_x[:-1], point_y[:-1], c='b')
+    plt.scatter(point_x[-1], point_y[-1], c='r')
+    
+    
+    buf = io.BytesIO()
+    plt.savefig(buf)
+    buf.seek(0)
+    img = TF.to_tensor(Image.open(buf))
+    buf.close()
+    plt.close()
+    return img
+
 OmegaConf.register_new_resolver("eval", eval, replace=True)
 
-class TrainDiffusionWorldModelUnetImageWorkspace(BaseWorkspace):
+class TrainDiffusionWorldModelUnetKeypointWorkspace(BaseWorkspace):
     include_keys = ['global_step', 'epoch']
 
     def __init__(self, cfg: OmegaConf, output_dir=None):
@@ -48,9 +79,9 @@ class TrainDiffusionWorldModelUnetImageWorkspace(BaseWorkspace):
         random.seed(seed)
 
         # configure model
-        self.model: DiffusionWorldModelImageUnet = hydra.utils.instantiate(cfg.world_model)
+        self.model: DiffusionWorldModelKeypointUnet = hydra.utils.instantiate(cfg.world_model)
 
-        self.ema_model: DiffusionWorldModelImageUnet = None
+        self.ema_model: DiffusionWorldModelKeypointUnet = None
         if cfg.training.use_ema:
             self.ema_model = copy.deepcopy(self.model)
 
@@ -83,11 +114,12 @@ class TrainDiffusionWorldModelUnetImageWorkspace(BaseWorkspace):
                 self.load_checkpoint(path=lastest_ckpt_path)
 
         # configure dataset
-        dataset: PushTImageDataset
+        dataset: PushTLowdimDataset
         dataset = hydra.utils.instantiate(cfg.task.dataset)
-        assert isinstance(dataset, PushTImageDataset)
+        assert isinstance(dataset, PushTLowdimDataset)
         train_dataloader = DataLoader(dataset, **cfg.dataloader)
         normalizer = dataset.get_normalizer()
+        print('Got normalizer', normalizer)
 
         # configure validation dataset
         val_dataset = dataset.get_validation_dataset()
@@ -117,13 +149,6 @@ class TrainDiffusionWorldModelUnetImageWorkspace(BaseWorkspace):
                 cfg.ema,
                 model=self.ema_model)
 
-        # configure env
-        # env_runner: BaseImageRunner
-        # env_runner = hydra.utils.instantiate(
-        #     cfg.task.env_runner,
-        #     output_dir=self.output_dir)
-        # assert isinstance(env_runner, BaseImageRunner)
-        
         # configure logging
         wandb_run = wandb.init(
             dir=str(self.output_dir),
@@ -184,25 +209,6 @@ class TrainDiffusionWorldModelUnetImageWorkspace(BaseWorkspace):
                         raw_loss = self.model.compute_loss(batch)
                         loss = raw_loss / cfg.training.gradient_accumulate_every
                         loss.backward()
-
-                        # # profiling
-                        # with profile(
-                        #     activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
-                        #     profile_memory=True,  # <<-- important!
-                        #     record_shapes=True
-                        # ) as prof:
-                        #     with record_function("model_inference"):
-                        #         # run your forward pass
-
-                        #         raw_loss = self.model.compute_loss(batch)
-                        #         loss = raw_loss / cfg.training.gradient_accumulate_every
-                        #         loss.backward()
-
-                        # # Then print or sort the profiling info
-                        # print(prof.key_averages().table(
-                        #     sort_by="self_cuda_memory_usage", row_limit=200
-                        # ))
-
                         # step optimizer
                         if self.global_step % cfg.training.gradient_accumulate_every == 0:
                             self.optimizer.step()
@@ -273,40 +279,43 @@ class TrainDiffusionWorldModelUnetImageWorkspace(BaseWorkspace):
                             predict_video_path_list.append(predict_filename)
 
                             # image trajectory for calcualting mse
-                            gt_image_trajectory = torch.tensor(dataset.replay_buffer['img'][start_idx:start_idx + episode_length], dtype=torch.float32)/255
-                            predicted_image_trajectory = torch.zeros_like(gt_image_trajectory)
-                            predicted_image_trajectory[:world_model.n_obs_steps] = gt_image_trajectory[:world_model.n_obs_steps]
+                            gt_keyp_trajectory = torch.tensor(dataset.replay_buffer['keypoint'][start_idx:start_idx + episode_length], dtype=torch.float32)
+                            predicted_keyp_trajectory = torch.zeros_like(gt_keyp_trajectory)
+                            predicted_keyp_trajectory[:world_model.n_obs_steps] = gt_keyp_trajectory[:world_model.n_obs_steps]
 
                             # ground truth video
                             self.video_recoder.start(gt_filename)
                             for i in range(episode_length - world_model.n_obs_steps):
-                                image = dataset.replay_buffer['img'][start_idx + i]
+                                image = np.transpose(keypoint_to_image(dataset.replay_buffer['keypoint'][start_idx + i]).numpy(), (1, 2, 0))[:, :, :3] * 255
+                                print(image.astype(np.uint8).min(), image.astype(np.uint8).max())
+                                Image.fromarray(image.astype(np.uint8)).save('tst.png')
                                 self.video_recoder.write_frame(image.astype(np.uint8))
                             self.video_recoder.stop()
 
                             # predicted video
-                            image_history = dataset.replay_buffer['img'][start_idx:start_idx + world_model.n_obs_steps]
-                            image_history = np.moveaxis(image_history,-1,1)/255
-                            predicted_image_history = {
-                                "image": torch.tensor(image_history, dtype=torch.float32).to(device).unsqueeze(0)
+                            keyp_history = dataset._sample_to_data(dataset.replay_buffer)['obs'][start_idx + i:start_idx + i + world_model.n_obs_steps]
+                            predicted_keyp_history = {
+                                "obs": torch.tensor(keyp_history, dtype=torch.float32).to(device).unsqueeze(0)
                             }
                             self.video_recoder.start(predict_filename)
-                            for i in range(world_model.n_obs_steps):
-                                image = dataset.replay_buffer['img'][start_idx + i]
-                                self.video_recoder.write_frame(image.astype(np.uint8))
-                            for i in range(episode_length - world_model.n_obs_steps - world_model.n_future_steps):
+                            # for i in range(world_model.n_obs_steps):
+                            #     image = dataset.replay_buffer['img'][start_idx + i]
+                            #     self.video_recoder.write_frame(image.astype(np.uint8))
+                            for i in trange(episode_length - world_model.n_obs_steps - world_model.n_future_steps):
                                 action = dataset.replay_buffer['action'][start_idx + i:start_idx + i + world_model.n_obs_steps + world_model.n_future_steps - 1]
                                 action = torch.tensor(action, dtype=torch.float32).to(device)
-                                predicted_images = world_model.predict_future(predicted_image_history, action)["predicted_future"] # B, T, C, H, W
+                                predicted_keyp = world_model.predict_future(predicted_keyp_history, action)["predicted_future"] # B, T, C, H, W
                                 # append the first predicted image to update predicted_image_history
-                                predicted_image_history['image'] = torch.cat([predicted_image_history['image'][:, 1:], predicted_images], dim=1)
-                                unnormalized_images = predicted_images[0]
-                                unnormalized_images = torch.moveaxis(unnormalized_images, 1, -1)
-                                predicted_image_trajectory[i + world_model.n_obs_steps + world_model.n_future_steps] = unnormalized_images[0]
-                                unnormalized_images = (unnormalized_images.detach().cpu().numpy() * 255).astype(np.uint8)
-                                self.video_recoder.write_frame(unnormalized_images[0]) # only use the first frame
+                                predicted_keyp_history['obs'] = torch.cat([predicted_keyp_history['obs'][:, 1:], predicted_keyp], dim=1)
+                                unnormalized_keyps = normalizer['obs'].unnormalize(predicted_keyp[0])
+                                unnormalized_keyps = torch.moveaxis(unnormalized_keyps, 1, -1)
+                                predicted_keyp_trajectory[i + world_model.n_obs_steps + world_model.n_future_steps] = unnormalized_keyps[0][:-2].view(predicted_keyp_trajectory.shape[1:])
+                                unnormalized_keyps = (unnormalized_keyps.detach().cpu().numpy())
+                                # print(np.transpose(keypoint_to_image(unnormalized_keyps[0]) * 255, (1, 2, 0))[:,:,:3].numpy().astype(np.uint8).min())
+                                # print(np.transpose(keypoint_to_image(unnormalized_keyps[0]) * 255, (1, 2, 0))[:,:,:3].numpy().astype(np.uint8).shape)
+                                self.video_recoder.write_frame(np.transpose(keypoint_to_image(unnormalized_keyps[0]) * 255, (1, 2, 0))[:,:,:3].numpy().astype(np.uint8))# only use the first frame
                             self.video_recoder.stop()
-                        mse_list.append(torch.nn.functional.mse_loss(predicted_image_trajectory, gt_image_trajectory).item())
+                        mse_list.append(torch.nn.functional.mse_loss(predicted_keyp_trajectory, gt_keyp_trajectory).item())
                     rollout_log = dict()
                     rollout_log['test_mse'] = np.mean(mse_list)
                     for i, video_path in enumerate(gt_video_path_list):
@@ -336,60 +345,52 @@ class TrainDiffusionWorldModelUnetImageWorkspace(BaseWorkspace):
                             step_log['val_loss'] = val_loss
 
                 # run diffusion sampling on a training batch
-                if (self.epoch % cfg.training.sample_every) == 0:
-                    with torch.no_grad():
-                        # sample trajectory from training set, and evaluate difference
-                        batch = dict_apply(train_sampling_batch, lambda x: x.to(device, non_blocking=True))
-                        obs_dict = batch['obs']
-                        target_future_images = obs_dict['image'][:,self.model.n_obs_steps:self.model.n_obs_steps+self.model.n_future_steps,...]
-                        history_obs_dict = dict_apply(obs_dict, lambda x: x[:,:self.model.n_obs_steps,...])
-                        gt_action = batch['action']
-                        future_action = gt_action[:,:self.model.n_obs_steps+self.model.n_future_steps-1,...]
+                # if (self.epoch % cfg.training.sample_every) == 0:
+                #     with torch.no_grad():
+                #         # sample trajectory from training set, and evaluate difference
+                #         batch = dict_apply(train_sampling_batch, lambda x: x.to(device, non_blocking=True))
+                #         obs_dict = batch['obs']
+                #         print('keypoint', obs_dict.shape)
+                #         target_future_keyps = obs_dict[:,self.model.n_obs_steps:self.model.n_obs_steps+self.model.n_future_steps,...]
+                #         history_obs_dict = dict_apply(obs_dict, lambda x: x[:,:self.model.n_obs_steps,...])
+                #         gt_action = batch['action']
+                #         future_action = gt_action[:,:self.model.n_obs_steps+self.model.n_future_steps-1,...]
                         
-                        result = world_model.predict_future(history_obs_dict, future_action)
-                        pred_future_images = result["predicted_future"]
-                        mse = torch.nn.functional.mse_loss(pred_future_images, target_future_images)
-                        step_log['train_pred_image_mse_error'] = mse.item()
-                        # log predicted and ground truth future images
-                        pred_images = (pred_future_images[0].cpu().numpy() * 255).astype(np.uint8)
-                        pred_images = np.moveaxis(pred_images, 1, -1)
-                        gt_images = (target_future_images[0].cpu().numpy() * 255).astype(np.uint8)
-                        gt_images = np.moveaxis(gt_images, 1, -1)
-                        pred_wandb_img = wandb.Image(pred_images[0], caption="Predicted future image")
-                        gt_wandb_img = wandb.Image(gt_images[0], caption="Ground truth future image")
-                        step_log['train_pred_future_image'] = pred_wandb_img
-                        step_log['train_gt_future_image'] = gt_wandb_img
-                        del batch
-                        del obs_dict
-                        del gt_action
-                        del result
-                        del future_action
-                        del mse
-                        del target_future_images
-                        del history_obs_dict
-                        del pred_future_images
+                #         result = world_model.predict_future(history_obs_dict, future_action)
+                #         pred_future_keyps = result["predicted_future"]
+                #         mse = torch.nn.functional.mse_loss(pred_future_keyps, target_future_keyps)
+                #         step_log['train_pred_image_mse_error'] = mse.item()
+                #         del batch
+                #         del obs_dict
+                #         del gt_action
+                #         del result
+                #         del future_action
+                #         del mse
+                #         del target_future_keyps
+                #         del history_obs_dict
+                #         del pred_future_keyps
                 
                 # checkpoint
-                if (self.epoch % cfg.training.checkpoint_every) == 0:
-                    # checkpointing
-                    if cfg.checkpoint.save_last_ckpt:
-                        self.save_checkpoint()
-                    if cfg.checkpoint.save_last_snapshot:
-                        self.save_snapshot()
+                # if (self.epoch % cfg.training.checkpoint_every) == 0:
+                #     # checkpointing
+                #     if cfg.checkpoint.save_last_ckpt:
+                #         self.save_checkpoint()
+                #     if cfg.checkpoint.save_last_snapshot:
+                #         self.save_snapshot()
 
-                    # sanitize metric names
-                    metric_dict = dict()
-                    for key, value in step_log.items():
-                        new_key = key.replace('/', '_')
-                        metric_dict[new_key] = value
+                #     # sanitize metric names
+                #     metric_dict = dict()
+                #     for key, value in step_log.items():
+                #         new_key = key.replace('/', '_')
+                #         metric_dict[new_key] = value
                     
-                    # We can't copy the last checkpoint here
-                    # since save_checkpoint uses threads.
-                    # therefore at this point the file might have been empty!
-                    topk_ckpt_path = topk_manager.get_ckpt_path(metric_dict)
+                #     # We can't copy the last checkpoint here
+                #     # since save_checkpoint uses threads.
+                #     # therefore at this point the file might have been empty!
+                #     topk_ckpt_path = topk_manager.get_ckpt_path(metric_dict)
 
-                    if topk_ckpt_path is not None:
-                        self.save_checkpoint(path=topk_ckpt_path)
+                #     if topk_ckpt_path is not None:
+                #         self.save_checkpoint(path=topk_ckpt_path)
                 # ========= eval end for this epoch ==========
                 world_model.train()
 
@@ -405,7 +406,7 @@ class TrainDiffusionWorldModelUnetImageWorkspace(BaseWorkspace):
     config_path=str(pathlib.Path(__file__).parent.parent.joinpath("config")), 
     config_name=pathlib.Path(__file__).stem)
 def main(cfg):
-    workspace = TrainDiffusionWorldModelUnetImageWorkspace(cfg)
+    workspace = TrainDiffusionWorldModelUnetKeypointWorkspace(cfg)
     workspace.run()
 
 if __name__ == "__main__":

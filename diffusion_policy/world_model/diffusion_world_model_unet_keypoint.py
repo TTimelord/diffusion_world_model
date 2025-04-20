@@ -15,39 +15,37 @@ from diffusion_policy.common.pytorch_util import dict_apply
 from diffusion_policy.model.diffusion.conditional_unet1d import ConditionalUnet1D
 from diffusion_policy.model.diffusion.conditional_unet2d import ConditionalUNet2D, FourierFeatures, Conv3x3, GroupNorm
 from diffusion_policy.model.diffusion.positional_embedding import SinusoidalPosEmb
-from diffusion_policy.model.equi.equi_obs_autoencoder import EquivariantObsEnc, EquivariantObsDec
 
-class DiffusionWorldModelImageUnet(BaseWorldModel):
+class DiffusionWorldModelKeypointUnet(BaseWorldModel):
     """
-    Diffusion-based image world model. Predicts future images conditioned on
-    (past images, action sequence).
+    Diffusion-based keypoint world model. Predicts future keypoints conditioned on
+    (past keypoint, action sequence).
 
-    This is analogous to DiffusionUnetImagePolicy, but for modeling the environment
-    rather than producing actions.
+    This is analogous to DiffusionWorldModelImageUnet, but for modeling the environment
+    in keypoints rather than producing images.
     """
-
     def __init__(self,
                  shape_meta: dict,
                  noise_scheduler: DDPMScheduler,
+                 obs_encoder: MultiImageObsEncoder,
                  n_obs_steps: int,
                  n_future_steps : int = 1,
                  num_inference_steps=None,
                  cond_channels=256,
                  depths = [2,2,2,2],
-                 channels= [64,64,64,64],
+                 unet_dims = [256, 512, 1024],
                  attn_depths= [0,0,0,0],
-                 N=8,
                  **kwargs):
         """
         shape_meta:
-            includes info about 'obs_image' shape: e.g. (3, H, W)
+            includes info about 'obs' shape: e.g. (3, H, W)
             includes info about 'action' shape: e.g. (action_dim,)
         noise_scheduler:
             A diffusion scheduler instance (DDPMScheduler, DDIM, etc.)
         n_obs_steps:
-            How many past image frames are used as context
+            How many past keypoint frames are used as context
         n_future_steps:
-            How many future frames we want to predict
+            How many future keypoint frames we want to predict
         """
         super().__init__(shape_meta, **kwargs)
 
@@ -57,52 +55,36 @@ class DiffusionWorldModelImageUnet(BaseWorldModel):
         # parse action dimension
         action_dim = shape_meta['action']['shape'][0]
 
-        # get img channels
-        img_channels = shape_meta['obs']['image']['shape'][0]
+        # get keypoint shape
+        keypoint_size = shape_meta['obs']['keypoint']['shape'][-1]
 
-        self.encoder = EquivariantObsEnc(
-            obs_shape=shape_meta['obs']['image']['shape'], 
-            crop_shape=shape_meta['obs']['image']['shape'][1:], 
-            lats_channel=channels[0], 
-            N=N
-        )  # 12x12
-        
-        self.conv_in = Conv3x3((n_obs_steps + n_future_steps) * channels[0] * N, channels[0])
-        #TODO: make this equivariant
-        self.diffusion_step_encoder = nn.Sequential(
-            SinusoidalPosEmb(cond_channels),
-            nn.Linear(cond_channels, cond_channels * 4),
-            nn.Mish(),
-            nn.Linear(cond_channels * 4, cond_channels),
-        )
-        #TODO: make this equivariant
-        self.act_proj = nn.Sequential(
-            nn.Linear(action_dim * (n_obs_steps+n_future_steps-1), cond_channels),
-            nn.SiLU(),
-            nn.Linear(cond_channels, cond_channels),
-        )
-        #TODO: make this equivariant
+        # self.diffusion_step_encoder = nn.Sequential(
+        #     SinusoidalPosEmb(cond_channels),
+        #     nn.Linear(cond_channels, cond_channels * 4),
+        #     nn.Mish(),
+        #     nn.Linear(cond_channels * 4, cond_channels),
+        # )
+        # self.act_proj = nn.Sequential(
+        #     nn.Linear(action_dim * (n_obs_steps+n_future_steps-1), cond_channels),
+        #     nn.SiLU(),
+        #     nn.Linear(cond_channels, cond_channels),
+        # )
         self.cond_proj = nn.Sequential(
             nn.Linear(cond_channels, cond_channels),
             nn.SiLU(),
             nn.Linear(cond_channels, cond_channels),
         )
-        #TODO: make this equivariant
-        self.unet = ConditionalUNet2D(
-            cond_channels = cond_channels,
-            depths = depths, 
-            channels = channels, 
-            attn_depths = attn_depths
+        # self.dense_in = nn.Linear(keypoint_size, 64)
+
+        self.unet = ConditionalUnet1D(
+            input_dim=n_obs_steps + n_future_steps,
+            global_cond_dim=action_dim*n_obs_steps,
+            diffusion_step_embed_dim=cond_channels
         )
-        #TODO: make this equivariant
-        self.norm_out = GroupNorm(channels[-1])
-        self.conv_out = Conv3x3(channels[-1], channels[-1]*N*n_future_steps)
-        
-        self.decoder = EquivariantObsDec(
-            lats_channel=channels[-1],
-            obs_channel=img_channels,
-            N=N,
-        )
+
+        # self.norm_out = GroupNorm(unet_dims[-1])
+        # self.dense_out = nn.Linear(unet_dims[-1], keypoint_size)
+        # nn.init.zeros_(self.conv_out.weight)
 
         trainable_params = sum(p.numel() for p in self.unet.parameters() if p.requires_grad)
         print(f'Trainable parameters in unet: {trainable_params}')
@@ -120,63 +102,59 @@ class DiffusionWorldModelImageUnet(BaseWorldModel):
         # normalizer for images if needed
         self.normalizer = LinearNormalizer()
         self.n_obs_steps = n_obs_steps
+        self.TT = n_obs_steps + n_future_steps
 
     def predict_future(self, obs_dict: Dict[str, torch.Tensor], action) -> Dict[str, torch.Tensor]:
         """
         Inference method:
-          - 'obs_dict' should contain "obs" => (B, n_obs_steps, C, H, W)
+          - 'obs_dict' should contain "obs" => (B, n_obs_steps, S)
             and "action" => (B, n_future_steps, action_dim)
-          - returns a dict with "predicted_future" => (B, n_future_steps, C, H, W)
+          - returns a dict with "predicted_future" => (B, n_future_steps, S)
         """
         with torch.inference_mode():
             nobs = self.normalizer.normalize(obs_dict)
             nactions = self.normalizer['action'].normalize(action)
-            history_imgs = nobs['image']  # shape (B, n_obs_steps, C, H, W)
+            history_keyp = nobs['obs']
             action_seq = nactions  # shape (B, n_future_steps, Da)
-            device = history_imgs.device
-            dtype = history_imgs.dtype
+            device = history_keyp.device
+            dtype = history_keyp.dtype
 
-            B, To, C, H, W = history_imgs.shape
+            B, To, S = history_keyp.shape
             assert To == self.n_obs_steps, f"Expected n_obs_steps={self.n_obs_steps}, got {To}."
-            
-            encoded_his = self.encoder(history_imgs)  # --> (B, T, channels[0], 12, 12)
-            
-            B, To, C, H, W = encoded_his.shape
 
             # Start from random noise
             # If you want the model to be deterministic, consider using zero noise
-            noisy_lats = torch.randn((B, self.n_future_steps * C, H, W), device=device, dtype=dtype)
+            noisy_keyp = torch.randn((B, self.n_future_steps, S), device=device, dtype=dtype)
 
             # set up timesteps
             self.noise_scheduler.set_timesteps(self.num_inference_steps, device=device)
 
             # reshape
-            encoded_his = encoded_his.view(B, self.n_obs_steps * C, H, W)
+            # history_imgs = history_imgs.view(B, self.n_obs_steps * C, H, W)
             action_seq = action_seq.view(B, -1)
 
             for t in self.noise_scheduler.timesteps:
                 # forward the model
-                if torch.is_tensor(t) and len(t.shape) == 0:
-                    timesteps = t[None].to(device)
-                timesteps = timesteps.expand(noisy_lats.shape[0])
+                # if torch.is_tensor(t) and len(t.shape) == 0:
+                assert torch.is_tensor(t) and len(t.shape) == 0
+                timesteps = t[None].to(device)
+                timesteps = timesteps.expand(noisy_keyp.shape[0])
 
-                cond = self.cond_proj(self.diffusion_step_encoder(timesteps) + self.act_proj(action_seq))
-                x = self.conv_in(torch.cat((encoded_his, noisy_lats), dim=1))
-                x, _, _ = self.unet(x, cond)
-                x = self.conv_out(F.silu(self.norm_out(x)))
-                
+                # cond = self.cond_proj(self.diffusion_step_encoder(timesteps) + self.act_proj(action_seq))
+                # print('cond', cond.shape)
+                x = torch.cat((history_keyp, noisy_keyp), dim=1).transpose(2, 1)
+                x = self.unet(x, timesteps, global_cond=action_seq)
                 # diffusion update
-                noisy_lats = self.noise_scheduler.step(
-                    x, t, noisy_lats
-                ).prev_sample
+                noisy_keyp = self.noise_scheduler.step(
+                    x.transpose(2, 1), t, noisy_keyp
+                ).prev_sample[:, -self.n_future_steps:, :]
 
-            predicted = noisy_image.view(B, self.n_future_steps, C, H, W)
-            unnormalized_predicted = self.normalizer['image'].unnormalize(predicted)
+            predicted = noisy_keyp.view(B, self.n_future_steps, S)
 
         return {
-            "predicted_future": unnormalized_predicted
+            "predicted_future": predicted
         }
-
+    
     def set_normalizer(self, normalizer: LinearNormalizer):
         """
         If you want to load a normalizer state or override it for training,
@@ -193,51 +171,48 @@ class DiffusionWorldModelImageUnet(BaseWorldModel):
           4) model predicts noise (or sample)
           5) MSE loss
         """
-        nobs = self.normalizer.normalize(batch['obs'])
+        nobs = self.normalizer.normalize({'obs': batch['obs']})
         nactions = self.normalizer['action'].normalize(batch['action'])
 
-        imgs = nobs['image']
-        history_imgs = imgs[:, :self.n_obs_steps]
-        future_imgs = imgs[:, self.n_obs_steps:self.n_obs_steps+self.n_future_steps]
+        keyps = nobs['obs']
+        history_keyps = keyps[:, :self.n_obs_steps]
+        future_keyps = keyps[:, self.n_obs_steps:self.n_obs_steps+self.n_future_steps]
         action_seq = nactions[:, :self.n_obs_steps+self.n_future_steps-1]
 
-        B, T, C, H, W = future_imgs.shape
+        B, T, S = future_keyps.shape
         assert T == self.n_future_steps, f"Expected n_future_steps={self.n_future_steps}, got {T}."
-        
+
         # flatten images
-        # x_0 = future_imgs.view(B, self.n_future_steps * C, H, W)
-        # history_imgs = history_imgs.view(B, self.n_obs_steps * C, H, W)
-        
-        encoded_gt = rearrange(self.encoder(future_imgs), 'b t c h w -> b (t c) h w')
-        encoded_his = rearrange(self.encoder(history_imgs), 'b t c h w -> b (t c) h w')
+        x_0 = future_keyps.view(B, self.n_future_steps, S)
+        history_keyps = history_keyps.view(B, self.n_obs_steps, S)
 
         # sample random timesteps for each sample
         timesteps = torch.randint(
             0, self.noise_scheduler.config.num_train_timesteps,
-            (B,), device=encoded_gt.device
+            (B,), device=x_0.device
         ).long()
 
         # noise
-        noise = torch.randn_like(encoded_gt, device=encoded_gt.device)
+        noise = torch.randn_like(x_0, device=x_0.device)
 
         # forward diffusion
-        noisy_gt = self.noise_scheduler.add_noise(encoded_gt, noise, timesteps)
+        noisy_x = self.noise_scheduler.add_noise(x_0, noise, timesteps)
 
         # condition
         action_seq = action_seq.reshape(B, -1)
-        cond = self.cond_proj(self.diffusion_step_encoder(timesteps) + self.act_proj(action_seq))
-        x = self.conv_in(torch.cat((encoded_his, noisy_gt), dim=1))
-        x, _, _ = self.unet(x, cond)
-        x = self.conv_out(F.silu(self.norm_out(x)))
-        x = self.decoder(rearrange(x, 'b (t c) h w -> b t c h w', t=self.n_future_steps))
-        
+        # print('history_keyp', history_keyps.shape)
+        # print('noisy_keyp', noisy_x.shape)
+        x = torch.cat((history_keyps, noisy_x), dim=1)
+        # print('x', x.shape)
+        x = self.unet(x.transpose(1, 2), timesteps, global_cond=action_seq).transpose(1, 2)
+        # x = self.dense_out(F.silu(self.norm_out(x)))
 
         # compute target
         pred_type = self.noise_scheduler.config.prediction_type
         if pred_type == 'epsilon':
             target = noise
         elif pred_type == 'sample':
-            target = future_imgs
+            target = x_0
         else:
             raise ValueError(f"Unsupported prediction type {pred_type}")
 
