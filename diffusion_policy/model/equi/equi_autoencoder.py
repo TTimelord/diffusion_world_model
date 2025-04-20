@@ -48,7 +48,7 @@ class EquiResBlock(torch.nn.Module):
                 nn.R2Conv(feat_type_in, feat_type_hid, kernel_size=1, stride=stride, bias=False, initialize=initialize),
             )
         
-        self.batch_norm = nn.IIDBatchNorm2d(feat_type_hid)
+        self.batch_norm = nn.InnerBatchNorm(feat_type_hid)
 
     def forward(self, xx: nn.GeometricTensor) -> nn.GeometricTensor:
         residual = xx
@@ -84,7 +84,7 @@ class EquivResEnc96to24(torch.nn.Module):
                 padding=1,
                 initialize=initialize,
             ),
-            # 32x48x48
+            # 32x96x96
             nn.ReLU(nn.FieldType(self.group, NUM_CHANNEL_1 * [self.group.regular_repr]), inplace=True),
             EquiResBlock(self.group, NUM_CHANNEL_1, NUM_CHANNEL_2, initialize=True),
             EquiResBlock(self.group, NUM_CHANNEL_2, NUM_CHANNEL_2, initialize=True),
@@ -96,14 +96,14 @@ class EquivResEnc96to24(torch.nn.Module):
             # 32x24x24
             nn.R2Conv(
                 nn.FieldType(self.group, NUM_CHANNEL_1 * [self.group.regular_repr]),
-                nn.FieldType(self.group, out_channels * [self.group.regular_repr]),
+                nn.FieldType(self.group, out_channels * [self.group.trivial_repr]),
                 kernel_size=3,
                 stride=1,
                 padding=1,
                 initialize=initialize,
             ),
-            nn.ReLU(nn.FieldType(self.group, out_channels * [self.group.regular_repr]), inplace=True),
-            # 3x24x24
+            nn.ReLU(nn.FieldType(self.group, out_channels * [self.group.trivial_repr]), inplace=True),
+            # 1x24x24
         )
 
     def forward(self, x) -> torch.Tensor:
@@ -161,7 +161,7 @@ class EquiResUpBlock(torch.nn.Module):
                 )
             )
             
-        self.batch_norm = nn.IIDBatchNorm2d(feat_type_out)
+        self.batch_norm = nn.InnerBatchNorm(feat_type_out)
         
         self.relu = nn.ReLU(feat_type_out, inplace=True)
         self.out_type = feat_type_out
@@ -195,9 +195,9 @@ class EquivResDec24to96(torch.nn.Module):
         self.group = gspaces.rot2dOnR2(N)
         
         self.up_blocks = torch.nn.Sequential(
-            # 3x24x24
+            # 1x24x24
             nn.R2Conv(
-                nn.FieldType(self.group, in_channels * [self.group.regular_repr]),
+                nn.FieldType(self.group, in_channels * [self.group.trivial_repr]),
                 nn.FieldType(self.group, NUM_CHANNEL_1 * [self.group.regular_repr]),
                 kernel_size=3,
                 stride=1,
@@ -223,7 +223,7 @@ class EquivResDec24to96(torch.nn.Module):
         
     def forward(self, x) -> torch.Tensor:
         if type(x) is torch.Tensor:
-            x = nn.GeometricTensor(x, nn.FieldType(self.group, self.in_channels * [self.group.regular_repr]))
+            x = nn.GeometricTensor(x, nn.FieldType(self.group, self.in_channels * [self.group.trivial_repr]))
         return self.tanh(self.up_blocks(x).tensor)
         return self.up_blocks(x).tensor
     

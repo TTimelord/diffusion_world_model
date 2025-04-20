@@ -32,17 +32,19 @@ class EquivariantAutoencoder(ModuleAttrMixin):
     def encode(self, obs):
         if isinstance(obs, nn.GeometricTensor):
             obs = obs.tensor
-        return self.encoder(obs)
+        out = self.encoder(obs)
+        return out
         
     def decode(self, lats):
         if isinstance(lats, nn.GeometricTensor):
             lats = lats.tensor
-        return self.decoder(lats)
+        out = self.decoder(lats)
+        return out
     
     def compute_loss(self, batch: Dict[str, torch.Tensor]):
         nobs = self.normalizer.normalize(batch['obs'])
         obs = nobs['image'].squeeze(1)
-        reconstructions = self.decoder(self.encoder(obs))
+        reconstructions = self.decode(self.encode(obs))
         
         # loss = multi_scale_ssim(
         #     obs, reconstructions,
