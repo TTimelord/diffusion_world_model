@@ -1,5 +1,5 @@
 import torch
-from piq.ms_ssim import multi_scale_ssim
+# from piq.ms_ssim import multi_scale_ssim
 from torchvision import models as vision_models
 from escnn import gspaces, nn
 from escnn.group import CyclicGroup
