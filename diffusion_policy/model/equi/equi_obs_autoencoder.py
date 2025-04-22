@@ -70,7 +70,8 @@ class Autoencoder(ModuleAttrMixin):
                  obs_channels=3,
                  lats_channels=1,
                  NUM_CHANNEL_1=32,
-                 NUM_CHANNEL_2=64
+                 NUM_CHANNEL_2=64,
+                 l2_loss_weight=0.05,
                  ):
         super().__init__()
         self.encoder = ResEnc96to24(obs_channels, lats_channels, NUM_CHANNEL_1, NUM_CHANNEL_2)
@@ -79,6 +80,7 @@ class Autoencoder(ModuleAttrMixin):
 
         self.obs_channels = obs_channels
         self.lats_channels = lats_channels
+        self.l2_loss_weight = l2_loss_weight
     
     def encode(self, obs):
         return self.encoder(obs)
@@ -89,9 +91,11 @@ class Autoencoder(ModuleAttrMixin):
     def compute_loss(self, batch: Dict[str, torch.Tensor]):
         nobs = self.normalizer.normalize(batch['obs'])
         obs = nobs['image'].squeeze(1)
-        reconstructions = self.decoder(self.encoder(obs))
+        latent = self.encode(obs)
+        reconstructions = self.decode(latent)
         
-        loss = torch.nn.functional.mse_loss(obs, reconstructions, reduce='mean')
+        loss = torch.nn.functional.mse_loss(obs, reconstructions, reduction='mean') \
+            + self.l2_loss_weight * torch.nn.functional.mse_loss(latent, torch.zeros_like(latent), reduction='mean')
         
         return loss
         

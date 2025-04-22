@@ -2,7 +2,7 @@ defaults:
   - _self_
   - task: pusht_image_world_model
 
-name: train_diffusion_world_model_unet_image
+name: train_autoencoder
 _target_: diffusion_policy.workspace.train_autoencoder_workspace.TrainAutoencoderWorkspace
 
 task_name: ${task.name}
@@ -21,6 +21,7 @@ autoencoder:
   lats_channels: 1
   NUM_CHANNEL_1: 32
   NUM_CHANNEL_2: 64
+  l2_loss_weight: 0.05
 
 ema:
   _target_: diffusion_policy.model.diffusion.ema_model.EMAModel
@@ -31,15 +32,15 @@ ema:
   max_value: 0.9999
 
 dataloader:
-  batch_size: 64
-  num_workers: 16
+  batch_size: 32
+  num_workers: 8
   shuffle: True
   pin_memory: True
   persistent_workers: False
 
 val_dataloader:
   batch_size: 64
-  num_workers: 16
+  num_workers: 8
   shuffle: False
   pin_memory: True
   persistent_workers: False
@@ -60,7 +61,7 @@ training:
   # optimization
   lr_scheduler: cosine
   lr_warmup_steps: 500
-  num_epochs: 300
+  num_epochs: 1000
   gradient_accumulate_every: 1
   # EMA destroys performance when used with BatchNorm
   # replace BatchNorm with GroupNorm.
@@ -70,8 +71,8 @@ training:
   # in epochs
   rollout_every: 1
   num_rollouts: 2
-  checkpoint_every: 10
-  val_every: 1
+  checkpoint_every: 20
+  val_every: 5
   sample_every: 5
   # steps per epoch
   max_train_steps: null
@@ -105,7 +106,7 @@ hydra:
   job:
     override_dirname: ${name}
   run:
-    dir: data/output/autoencoder_1_32_64_tanh #data/output/autoencoder/${autoencoder.lats_channels}_${autoencoder.NUM_CHANNEL_1}_${autoencoder.NUM_CHANNEL_2}/
+    dir: data/outputs/autoencoder_1_32_64_tanh_l2_regularized #data/output/autoencoder/${autoencoder.lats_channels}_${autoencoder.NUM_CHANNEL_1}_${autoencoder.NUM_CHANNEL_2}/
   sweep:
-    dir: data/output/autoencoder_1_32_64_tanh #data/output/autoencoder/${autoencoder.lats_channels}_${autoencoder.NUM_CHANNEL_1}_${autoencoder.NUM_CHANNEL_2}/
+    dir: data/outputs/autoencoder_1_32_64_tanh_l2_regularized #data/output/autoencoder/${autoencoder.lats_channels}_${autoencoder.NUM_CHANNEL_1}_${autoencoder.NUM_CHANNEL_2}/
     subdir: ${hydra.job.num}
