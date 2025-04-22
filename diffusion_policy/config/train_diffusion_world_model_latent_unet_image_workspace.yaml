@@ -30,14 +30,14 @@ world_model:
     clip_sample: True # required when predict_epsilon=False
     prediction_type: epsilon # or sample
 
-  autoencoder:
+  auto_encoder:
     _target_: diffusion_policy.model.equi.equi_obs_autoencoder.Autoencoder
     obs_channels: 3
     lats_channels: 1
     NUM_CHANNEL_1: 32
     NUM_CHANNEL_2: 64
     l2_loss_weight: 0.05
-  pretrained_auto_encoder_path: /home/lma326/course/diffusion_world_model/data/outputs/autoencoder_1_32_64_tanh/checkpoints/latest.ckpt
+  pretrained_auto_encoder_path: /home/lma326/course/diffusion_world_model/data/outputs/autoencoder_1_32_64_tanh_l2_regularized/checkpoints/latest.ckpt
 
   n_obs_steps: ${n_obs_steps}
   n_future_steps: ${n_future_steps}
