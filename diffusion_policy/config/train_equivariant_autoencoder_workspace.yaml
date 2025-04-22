@@ -106,7 +106,7 @@ hydra:
   job:
     override_dirname: ${name}
   run:
-    dir: data/output/EquivariantAutoencoder_trvial/${autoencoder.lats_channels}_${autoencoder.NUM_CHANNEL_1}_${autoencoder.NUM_CHANNEL_2}/
+    dir: data/outputs/EquivariantAutoencoder_trvial/${autoencoder.lats_channels}_${autoencoder.NUM_CHANNEL_1}_${autoencoder.NUM_CHANNEL_2}/
   sweep:
-    dir: data/output/EquivariantAutoencoder_trvial/${autoencoder.lats_channels}_${autoencoder.NUM_CHANNEL_1}_${autoencoder.NUM_CHANNEL_2}/
+    dir: data/outputs/EquivariantAutoencoder_trvial/${autoencoder.lats_channels}_${autoencoder.NUM_CHANNEL_1}_${autoencoder.NUM_CHANNEL_2}/
     subdir: ${hydra.job.num}
