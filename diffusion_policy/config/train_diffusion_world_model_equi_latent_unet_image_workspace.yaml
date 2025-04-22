@@ -2,8 +2,8 @@ defaults:
   - _self_
   - task: pusht_image_world_model
 
-name: train_diffusion_world_model_equiv_unet_image
-_target_: diffusion_policy.workspace.train_diffusion_world_model_unet_image_workspace.TrainDiffusionWorldModelUnetImageWorkspace
+name: train_diffusion_world_model_equi_latent_unet_image
+_target_: diffusion_policy.workspace.train_diffusion_world_model_latent_unet_image_workspace.TrainDiffusionWorldModelUnetImageWorkspace
 
 task_name: ${task.name}
 shape_meta: ${task.shape_meta}
@@ -16,7 +16,7 @@ dataset_obs_steps: ${n_obs_steps}
 obs_as_global_cond: True
 
 world_model:
-  _target_: diffusion_policy.world_model.diffusion_world_model_equiv_unet_image.DiffusionWorldModelImageUnet
+  _target_: diffusion_policy.world_model.diffusion_world_model_latent_unet_image.DiffusionWorldModelImageLatentUnet
 
   shape_meta: ${shape_meta}
   
@@ -28,21 +28,16 @@ world_model:
     beta_schedule: squaredcos_cap_v2
     variance_type: fixed_small # Yilun's paper uses fixed_small_log instead, but easy to cause Nan
     clip_sample: True # required when predict_epsilon=False
-    prediction_type: sample # epsilon or sample
+    prediction_type: epsilon # or sample
 
-  obs_encoder:
-    _target_: diffusion_policy.model.vision.multi_image_obs_encoder.MultiImageObsEncoder
-    shape_meta: ${shape_meta}
-    rgb_model:
-      _target_: diffusion_policy.model.vision.model_getter.get_resnet
-      name: resnet18
-      weights: null
-    resize_shape: null
-    # constant center crop
-    random_crop: False
-    use_group_norm: True
-    share_rgb_model: False
-    imagenet_norm: True
+  auto_encoder:
+    _target_: diffusion_policy.model.equi.equi_obs_autoencoder.EquivariantAutoencoder
+    obs_channels: 3
+    lats_channels: 1
+    NUM_CHANNEL_1: 32
+    NUM_CHANNEL_2: 64
+    N: 4    
+  pretrained_auto_encoder_path: /home/lma326/courses/deep_learning/dl_project/diffusion_world_model/data/output/EquivariantAutoencoder_trvial/1_32_64/checkpoints/latest.ckpt
 
   n_obs_steps: ${n_obs_steps}
   n_future_steps: ${n_future_steps}
@@ -51,11 +46,12 @@ world_model:
   # crop_shape: null
   cond_channels: 256
   depths: [2,2,2,2]
-  channels: [64, 64, 64, 64]
+  channels: [64,64,64,64]
   attn_depths: [0,0,0,0]
 
   # scheduler.step params
   # predict_epsilon: True
+
 
 ema:
   _target_: diffusion_policy.model.diffusion.ema_model.EMAModel
@@ -67,14 +63,14 @@ ema:
 
 dataloader:
   batch_size: 32
-  num_workers: 4
+  num_workers: 8
   shuffle: True
   pin_memory: True
   persistent_workers: False
 
 val_dataloader:
   batch_size: 32
-  num_workers: 4
+  num_workers: 8
   shuffle: False
   pin_memory: True
   persistent_workers: False
@@ -94,7 +90,7 @@ training:
   # optimization
   lr_scheduler: cosine
   lr_warmup_steps: 500
-  num_epochs: 3000
+  num_epochs: 300
   gradient_accumulate_every: 1
   # EMA destroys performance when used with BatchNorm
   # replace BatchNorm with GroupNorm.
@@ -103,9 +99,9 @@ training:
   # training loop control
   # in epochs
   rollout_every: 10
-  num_rollouts: 3
+  num_rollouts: 2
   checkpoint_every: 10
-  val_every: 1
+  val_every: 5
   sample_every: 5
   # steps per epoch
   max_train_steps: null
@@ -120,7 +116,7 @@ logging:
   name: ${now:%Y.%m.%d-%H.%M.%S}_${name}_${task_name}
   tags: ["${name}", "${task_name}", "${exp_name}"]
   id: null
-  group: null
+  group: equi_latent_unet_image
 
 checkpoint:
   topk:
@@ -139,7 +135,7 @@ hydra:
   job:
     override_dirname: ${name}
   run:
-    dir: data/prev_output
+    dir: data/outputs/equi_latent_unet_image/${now:%Y.%m.%d}/${now:%H.%M.%S}
   sweep:
-    dir: data/prev_output
+    dir: data/outputs/equi_latent_unet_image/${now:%Y.%m.%d}/${now:%H.%M.%S}
     subdir: ${hydra.job.num}

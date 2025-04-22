@@ -7,7 +7,7 @@ from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
 
 from diffusion_policy.model.common.normalizer import LinearNormalizer
 from diffusion_policy.model.common.module_attr_mixin import ModuleAttrMixin
-from diffusion_policy.model.equi.equi_obs_autoencoder import Autoencoder
+from diffusion_policy.model.equi.equi_obs_autoencoder import Autoencoder, EquivariantAutoencoder
 from diffusion_policy.world_model.base_world_model import BaseWorldModel
 from diffusion_policy.model.vision.multi_image_obs_encoder import MultiImageObsEncoder
 from diffusion_policy.common.pytorch_util import dict_apply
@@ -28,6 +28,7 @@ class DiffusionWorldModelImageLatentUnet(BaseWorldModel):
     def __init__(self,
                  shape_meta: dict,
                  noise_scheduler: DDPMScheduler,
+                 auto_encoder: ModuleAttrMixin,
                  pretrained_auto_encoder_path: str,
                  n_obs_steps: int,
                  n_future_steps : int = 1,
@@ -51,10 +52,15 @@ class DiffusionWorldModelImageLatentUnet(BaseWorldModel):
         super().__init__(shape_meta, **kwargs)
 
         # freeze the autoencoder
-        self.auto_encoder = Autoencoder()
+        self.auto_encoder = auto_encoder
         checkpoint = torch.load(pretrained_auto_encoder_path, map_location=self.device)
         missing, unexpected = self.auto_encoder.load_state_dict(checkpoint["state_dicts"]["model"], strict=False)
         self.auto_encoder.to(self.device)
+        for param in self.auto_encoder.parameters():
+            param.detach_()  # detach from any graph
+            param.requires_grad = False  # freeze (probably you want this anyway)
+        for buf in self.auto_encoder.buffers():
+            buf.detach_()  # also detach buffers (e.g., running_mean in BatchNorm)
         self.auto_encoder.eval()
         self.auto_encoder.requires_grad_(False)
 
