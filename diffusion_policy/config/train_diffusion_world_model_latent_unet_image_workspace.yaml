@@ -1,0 +1,134 @@
+defaults:
+  - _self_
+  - task: pusht_image_world_model
+
+name: train_diffusion_world_model_latent_unet_image
+_target_: diffusion_policy.workspace.train_diffusion_world_model_latent_unet_image_workspace.TrainDiffusionWorldModelUnetImageWorkspace
+
+task_name: ${task.name}
+shape_meta: ${task.shape_meta}
+exp_name: "default"
+
+n_obs_steps: 4
+n_future_steps: 1
+horizon: ${eval:'${n_obs_steps}+${n_future_steps}'}
+dataset_obs_steps: ${n_obs_steps}
+obs_as_global_cond: True
+
+world_model:
+  _target_: diffusion_policy.world_model.diffusion_world_model_latent_unet_image.DiffusionWorldModelImageLatentUnet
+
+  shape_meta: ${shape_meta}
+  
+  noise_scheduler:
+    _target_: diffusers.schedulers.scheduling_ddpm.DDPMScheduler
+    num_train_timesteps: 100
+    beta_start: 0.0001
+    beta_end: 0.02
+    beta_schedule: squaredcos_cap_v2
+    variance_type: fixed_small # Yilun's paper uses fixed_small_log instead, but easy to cause Nan
+    clip_sample: True # required when predict_epsilon=False
+    prediction_type: epsilon # or sample
+
+  pretrained_auto_encoder_path: /home/lma326/course/diffusion_world_model/data/outputs/autoencoder_1_32_64_tanh/checkpoints/latest.ckpt
+
+  n_obs_steps: ${n_obs_steps}
+  n_future_steps: ${n_future_steps}
+  num_inference_steps: 100
+  obs_as_global_cond: ${obs_as_global_cond}
+  # crop_shape: null
+  cond_channels: 256
+  depths: [2,2,2,2]
+  channels: [64,64,64,64]
+  attn_depths: [0,0,0,0]
+
+  # scheduler.step params
+  # predict_epsilon: True
+
+
+ema:
+  _target_: diffusion_policy.model.diffusion.ema_model.EMAModel
+  update_after_step: 0
+  inv_gamma: 1.0
+  power: 0.75
+  min_value: 0.0
+  max_value: 0.9999
+
+dataloader:
+  batch_size: 32
+  num_workers: 8
+  shuffle: True
+  pin_memory: True
+  persistent_workers: False
+
+val_dataloader:
+  batch_size: 32
+  num_workers: 8
+  shuffle: False
+  pin_memory: True
+  persistent_workers: False
+
+optimizer:
+  _target_: torch.optim.AdamW
+  lr: 1.0e-4
+  betas: [0.95, 0.999]
+  eps: 1.0e-8
+  weight_decay: 1.0e-6
+
+training:
+  device: "cuda:0"
+  seed: 42
+  debug: False
+  resume: True
+  # optimization
+  lr_scheduler: cosine
+  lr_warmup_steps: 500
+  num_epochs: 300
+  gradient_accumulate_every: 1
+  # EMA destroys performance when used with BatchNorm
+  # replace BatchNorm with GroupNorm.
+  use_ema: True
+  freeze_encoder: False
+  # training loop control
+  # in epochs
+  rollout_every: 10
+  num_rollouts: 2
+  checkpoint_every: 10
+  val_every: 5
+  sample_every: 5
+  # steps per epoch
+  max_train_steps: null
+  max_val_steps: null
+  # misc
+  tqdm_interval_sec: 1.0
+
+logging:
+  project: diffusion_world_model
+  resume: True
+  mode: online
+  name: ${now:%Y.%m.%d-%H.%M.%S}_${name}_${task_name}
+  tags: ["${name}", "${task_name}", "${exp_name}"]
+  id: null
+  group: latent_unet_image
+
+checkpoint:
+  topk:
+    monitor_key: test_mse
+    mode: min
+    k: 5
+    format_str: 'epoch={epoch:04d}-test_mse={test_mse:.3f}.ckpt'
+  save_last_ckpt: True
+  save_last_snapshot: False
+
+multi_run:
+  run_dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
+  wandb_name_base: ${now:%Y.%m.%d-%H.%M.%S}_${name}_${task_name}
+
+hydra:
+  job:
+    override_dirname: ${name}
+  run:
+    dir: data/outputs/latent_unet_image/${now:%Y.%m.%d}/${now:%H.%M.%S}
+  sweep:
+    dir: data/outputs/latent_unet_image/${now:%Y.%m.%d}/${now:%H.%M.%S}
+    subdir: ${hydra.job.num}

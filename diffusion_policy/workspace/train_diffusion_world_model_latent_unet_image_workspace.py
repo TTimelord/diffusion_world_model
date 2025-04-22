@@ -7,14 +7,13 @@ if __name__ == "__main__":
     sys.path.append(ROOT_DIR)
     os.chdir(ROOT_DIR)
 
-
 import os
 import hydra
 import torch
 from omegaconf import OmegaConf
 import pathlib
 from torch.utils.data import DataLoader
-from torchvision.utils import save_image
+from torch.profiler import profile, record_function, ProfilerActivity
 import copy
 import random
 import wandb
@@ -23,18 +22,20 @@ import tqdm
 import numpy as np
 import shutil
 from diffusion_policy.workspace.base_workspace import BaseWorkspace
+from diffusion_policy.world_model.diffusion_world_model_unet_image import DiffusionWorldModelImageUnet
+from diffusion_policy.dataset.base_dataset import BaseImageDataset
 from diffusion_policy.dataset.pusht_image_dataset import PushTImageDataset
+from diffusion_policy.env_runner.base_image_runner import BaseImageRunner
 from diffusion_policy.common.checkpoint_util import TopKCheckpointManager
 from diffusion_policy.common.json_logger import JsonLogger
 from diffusion_policy.common.pytorch_util import dict_apply, optimizer_to
 from diffusion_policy.model.diffusion.ema_model import EMAModel
 from diffusion_policy.model.common.lr_scheduler import get_scheduler
-from diffusion_policy.model.equi.equi_obs_autoencoder import Autoencoder
-
+from diffusion_policy.gym_util.video_recording_wrapper import VideoRecordingWrapper, VideoRecorder
 
 OmegaConf.register_new_resolver("eval", eval, replace=True)
 
-class TrainAutoencoderWorkspace(BaseWorkspace):
+class TrainDiffusionWorldModelUnetImageWorkspace(BaseWorkspace):
     include_keys = ['global_step', 'epoch']
 
     def __init__(self, cfg: OmegaConf, output_dir=None):
@@ -47,10 +48,9 @@ class TrainAutoencoderWorkspace(BaseWorkspace):
         random.seed(seed)
 
         # configure model
-        # self.model = Autoencoder()
-        self.model: Autoencoder = hydra.utils.instantiate(cfg.autoencoder)
+        self.model: DiffusionWorldModelImageUnet = hydra.utils.instantiate(cfg.world_model)
 
-        self.ema_model: Autoencoder = None
+        self.ema_model: DiffusionWorldModelImageUnet = None
         if cfg.training.use_ema:
             self.ema_model = copy.deepcopy(self.model)
 
@@ -61,14 +61,23 @@ class TrainAutoencoderWorkspace(BaseWorkspace):
         # configure training state
         self.global_step = 0
         self.epoch = 0
+
+        # videos
+        self.video_recoder: VideoRecorder = VideoRecorder.create_h264(
+                        fps=cfg.task.env_runner.fps,
+                        codec='h264',
+                        input_pix_fmt='rgb24',
+                        crf=22,
+                        thread_type='FRAME',
+                        thread_count=1
+                    )
         
     def run(self):
         cfg = copy.deepcopy(self.cfg)
 
         # resume training
         if cfg.training.resume:
-            tag = cfg.training.ckpt_tag if 'ckpt_tag' in cfg.training else 'latest'
-            lastest_ckpt_path = self.get_checkpoint_path(tag)
+            lastest_ckpt_path = self.get_checkpoint_path()
             if lastest_ckpt_path.is_file():
                 print(f"Resuming from checkpoint {lastest_ckpt_path}")
                 self.load_checkpoint(path=lastest_ckpt_path)
@@ -114,7 +123,7 @@ class TrainAutoencoderWorkspace(BaseWorkspace):
         #     cfg.task.env_runner,
         #     output_dir=self.output_dir)
         # assert isinstance(env_runner, BaseImageRunner)
-        
+
         # configure logging
         wandb_run = wandb.init(
             dir=str(self.output_dir),
@@ -143,6 +152,15 @@ class TrainAutoencoderWorkspace(BaseWorkspace):
         # save batch for sampling
         train_sampling_batch = None
 
+        if cfg.training.debug:
+            cfg.training.num_epochs = 2
+            cfg.training.max_train_steps = 3
+            cfg.training.max_val_steps = 3
+            cfg.training.num_rollouts = 1
+            cfg.training.rollout_every = 1
+            cfg.training.checkpoint_every = 1
+            cfg.training.val_every = 1
+            cfg.training.sample_every = 1
 
         # training loop
         log_path = os.path.join(self.output_dir, 'logs.json.txt')
@@ -217,30 +235,7 @@ class TrainAutoencoderWorkspace(BaseWorkspace):
                         if (cfg.training.max_train_steps is not None) \
                             and batch_idx >= (cfg.training.max_train_steps-1):
                             break
-                    
-                    # run rollout on training
-                    if (self.epoch % cfg.training.rollout_every) == 0:
-                        with torch.no_grad():
-                            indices = random.sample(range(len(dataset)), cfg.training.num_rollouts)
-                            sampled_images = []
-                            for idx in indices:
-                                image = dataset[idx]['obs']['image'][0].unsqueeze(0)
-                                sampled_images.append(image)
-                            images = torch.cat(sampled_images, dim=0)
-                            batch = {'image': images}
-                            nobs = self.model.normalizer.normalize(batch)
-                            gts = nobs['image']
-                            reconstructions = self.model.decode(self.model.encode(gts))
-                            for idx, gt in enumerate(list(gts)):
-                                save_image(gt, pathlib.Path(self.output_dir).joinpath(
-                                'media', f"{self.epoch}_train_gt_{wv.util.generate_id()}.jpg"))
-                                save_image(reconstructions[idx], pathlib.Path(self.output_dir).joinpath(
-                                'media', f"{self.epoch}_train_reconstruct_{wv.util.generate_id()}.jpg"))
-                                reconstruct_wandb_img = wandb.Image(reconstructions[idx])
-                                gt_wandb_img = wandb.Image(gt)
-                                step_log[f'train gt {idx}'] = gt_wandb_img
-                                step_log[f'train reconstruction {idx}'] = reconstruct_wandb_img
-                                
+
                 # at the end of each epoch
                 # replace train_loss with epoch average
                 train_loss = np.mean(train_losses)
@@ -251,6 +246,77 @@ class TrainAutoencoderWorkspace(BaseWorkspace):
                 if cfg.training.use_ema:
                     world_model = self.ema_model
                 world_model.eval()
+
+                # run rollout
+                if (self.epoch % cfg.training.rollout_every) == 0:
+                    gt_video_path_list = []
+                    predict_video_path_list = []
+                    with torch.inference_mode():
+                        selected_indices = np.random.choice(len(dataset.replay_buffer.episode_ends), cfg.training.num_rollouts, replace=False)
+                        mse_list = []
+                        for idx in selected_indices:
+                            start_idx = 0 if idx == 0 else dataset.replay_buffer.episode_ends[idx-1]
+                            end_idx = dataset.replay_buffer.episode_ends[idx]
+                            episode_length = end_idx - start_idx
+                            if episode_length < world_model.n_obs_steps + world_model.n_future_steps:
+                                continue
+
+                            # video_writer
+                            gt_filename = pathlib.Path(self.output_dir).joinpath(
+                            'media', wv.util.generate_id() + ".mp4")
+                            gt_filename.parent.mkdir(parents=False, exist_ok=True)
+                            gt_filename = str(gt_filename)
+                            gt_video_path_list.append(gt_filename)
+                            predict_filename = pathlib.Path(self.output_dir).joinpath(
+                            'media', wv.util.generate_id() + ".mp4")
+                            predict_filename.parent.mkdir(parents=False, exist_ok=True)
+                            predict_filename = str(predict_filename) 
+                            predict_video_path_list.append(predict_filename)
+
+                            # image trajectory for calcualting mse
+                            gt_image_trajectory = torch.tensor(dataset.replay_buffer['img'][start_idx:start_idx + episode_length], dtype=torch.float32)/255
+                            predicted_image_trajectory = torch.zeros_like(gt_image_trajectory)
+                            predicted_image_trajectory[:world_model.n_obs_steps] = gt_image_trajectory[:world_model.n_obs_steps]
+
+                            # ground truth video
+                            self.video_recoder.start(gt_filename)
+                            for i in range(episode_length - world_model.n_obs_steps):
+                                image = dataset.replay_buffer['img'][start_idx + i]
+                                self.video_recoder.write_frame(image.astype(np.uint8))
+                            self.video_recoder.stop()
+
+                            # predicted video
+                            image_history = dataset.replay_buffer['img'][start_idx:start_idx + world_model.n_obs_steps]
+                            image_history = np.moveaxis(image_history,-1,1)/255
+                            predicted_image_history = {
+                                "image": torch.tensor(image_history, dtype=torch.float32).to(device).unsqueeze(0)
+                            }
+                            self.video_recoder.start(predict_filename)
+                            for i in range(world_model.n_obs_steps):
+                                image = dataset.replay_buffer['img'][start_idx + i]
+                                self.video_recoder.write_frame(image.astype(np.uint8))
+                            for i in tqdm.trange(episode_length - world_model.n_obs_steps):
+                                action = dataset.replay_buffer['action'][start_idx + i:start_idx + i + world_model.n_obs_steps + world_model.n_future_steps - 1]
+                                action = torch.tensor(action, dtype=torch.float32).to(device)
+                                predicted_images = world_model.predict_future(predicted_image_history, action)["predicted_future"] # B, T, C, H, W
+                                # append the first predicted image to update predicted_image_history
+                                predicted_image_history['image'] = torch.cat([predicted_image_history['image'][:, 1:], predicted_images], dim=1)
+                                unnormalized_images = predicted_images[0]
+                                unnormalized_images = torch.moveaxis(unnormalized_images, 1, -1)
+                                predicted_image_trajectory[i + world_model.n_obs_steps] = unnormalized_images[0]
+                                unnormalized_images = (unnormalized_images.detach().cpu().numpy() * 255).astype(np.uint8)
+                                self.video_recoder.write_frame(unnormalized_images[0]) # only use the first frame
+                            self.video_recoder.stop()
+                        mse_list.append(torch.nn.functional.mse_loss(predicted_image_trajectory, gt_image_trajectory).item())
+                    rollout_log = dict()
+                    rollout_log['test_mse'] = np.mean(mse_list)
+                    for i, video_path in enumerate(gt_video_path_list):
+                        sim_video = wandb.Video(video_path)
+                        rollout_log[f'gt_video_{i}'] = sim_video
+                    for i, video_path in enumerate(predict_video_path_list):
+                        sim_video = wandb.Video(video_path)
+                        rollout_log[f'predict_video_{i}'] = sim_video
+                    step_log.update(rollout_log)
 
                 # run validation
                 if (self.epoch % cfg.training.val_every) == 0:
@@ -265,34 +331,44 @@ class TrainAutoencoderWorkspace(BaseWorkspace):
                                 if (cfg.training.max_val_steps is not None) \
                                     and batch_idx >= (cfg.training.max_val_steps-1):
                                     break
-
-                            indices = random.sample(range(len(val_dataset)), cfg.training.num_rollouts)
-                            sampled_images = []
-                            for idx in indices:
-                                image = val_dataset[idx]['obs']['image'][0].unsqueeze(0)
-                                sampled_images.append(image)
-                            images = torch.cat(sampled_images, dim=0)
-                            batch = {'image': images}
-                            nobs = self.model.normalizer.normalize(batch)
-                            gts = nobs['image']
-                            reconstructions = self.model.decode(self.model.encode(gts))
-                            for idx, gt in enumerate(list(gts)):
-                                save_image(gt, pathlib.Path(self.output_dir).joinpath(
-                                'media', f"{self.epoch}_val_gt_{wv.util.generate_id()}.jpg"))
-                                save_image(reconstructions[idx], pathlib.Path(self.output_dir).joinpath(
-                                'media', f"{self.epoch}_val_reconstruct_{wv.util.generate_id()}.jpg"))
-                                
-                                reconstruct_wandb_img = wandb.Image(reconstructions[idx])
-                                gt_wandb_img = wandb.Image(gt)
-                                step_log[f'val gt {idx}'] = gt_wandb_img
-                                step_log[f'val reconstruction {idx}'] = reconstruct_wandb_img
-                                    
                         if len(val_losses) > 0:
                             val_loss = torch.mean(torch.tensor(val_losses)).item()
                             # log epoch average validation loss
                             step_log['val_loss'] = val_loss
-                            # step_log['test_mse'] = val_loss
-                            
+
+                # run diffusion sampling on a training batch
+                if (self.epoch % cfg.training.sample_every) == 0:
+                    with torch.no_grad():
+                        # sample trajectory from training set, and evaluate difference
+                        batch = dict_apply(train_sampling_batch, lambda x: x.to(device, non_blocking=True))
+                        obs_dict = batch['obs']
+                        target_future_images = obs_dict['image'][:,self.model.n_obs_steps:self.model.n_obs_steps+self.model.n_future_steps,...]
+                        history_obs_dict = dict_apply(obs_dict, lambda x: x[:,:self.model.n_obs_steps,...])
+                        gt_action = batch['action']
+                        future_action = gt_action[:,:self.model.n_obs_steps+self.model.n_future_steps-1,...]
+                        
+                        result = world_model.predict_future(history_obs_dict, future_action)
+                        pred_future_images = result["predicted_future"]
+                        mse = torch.nn.functional.mse_loss(pred_future_images, target_future_images)
+                        step_log['train_pred_image_mse_error'] = mse.item()
+                        # log predicted and ground truth future images
+                        pred_images = (pred_future_images[0].cpu().numpy() * 255).astype(np.uint8)
+                        pred_images = np.moveaxis(pred_images, 1, -1)
+                        gt_images = (target_future_images[0].cpu().numpy() * 255).astype(np.uint8)
+                        gt_images = np.moveaxis(gt_images, 1, -1)
+                        pred_wandb_img = wandb.Image(pred_images[0], caption="Predicted future image")
+                        gt_wandb_img = wandb.Image(gt_images[0], caption="Ground truth future image")
+                        step_log['train_pred_future_image'] = pred_wandb_img
+                        step_log['train_gt_future_image'] = gt_wandb_img
+                        del batch
+                        del obs_dict
+                        del gt_action
+                        del result
+                        del future_action
+                        del mse
+                        del target_future_images
+                        del history_obs_dict
+                        del pred_future_images
                 
                 # checkpoint
                 if (self.epoch % cfg.training.checkpoint_every) == 0:

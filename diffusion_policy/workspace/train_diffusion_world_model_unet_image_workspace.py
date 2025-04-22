@@ -294,7 +294,7 @@ class TrainDiffusionWorldModelUnetImageWorkspace(BaseWorkspace):
                             for i in range(world_model.n_obs_steps):
                                 image = dataset.replay_buffer['img'][start_idx + i]
                                 self.video_recoder.write_frame(image.astype(np.uint8))
-                            for i in range(episode_length - world_model.n_obs_steps - world_model.n_future_steps):
+                            for i in range(episode_length - world_model.n_obs_steps):
                                 action = dataset.replay_buffer['action'][start_idx + i:start_idx + i + world_model.n_obs_steps + world_model.n_future_steps - 1]
                                 action = torch.tensor(action, dtype=torch.float32).to(device)
                                 predicted_images = world_model.predict_future(predicted_image_history, action)["predicted_future"] # B, T, C, H, W
@@ -302,7 +302,7 @@ class TrainDiffusionWorldModelUnetImageWorkspace(BaseWorkspace):
                                 predicted_image_history['image'] = torch.cat([predicted_image_history['image'][:, 1:], predicted_images], dim=1)
                                 unnormalized_images = predicted_images[0]
                                 unnormalized_images = torch.moveaxis(unnormalized_images, 1, -1)
-                                predicted_image_trajectory[i + world_model.n_obs_steps + world_model.n_future_steps] = unnormalized_images[0]
+                                predicted_image_trajectory[i + world_model.n_obs_steps] = unnormalized_images[0]
                                 unnormalized_images = (unnormalized_images.detach().cpu().numpy() * 255).astype(np.uint8)
                                 self.video_recoder.write_frame(unnormalized_images[0]) # only use the first frame
                             self.video_recoder.stop()

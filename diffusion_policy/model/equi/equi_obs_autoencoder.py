@@ -18,7 +18,7 @@ from diffusion_policy.model.common.normalizer import LinearNormalizer
 class EquivariantAutoencoder(ModuleAttrMixin):
     def __init__(self,
                  obs_channels=3,
-                 lats_channels=3,
+                 lats_channels=1,
                  N=8,
                  initialize=True,
                  NUM_CHANNEL_1=32,
@@ -28,6 +28,9 @@ class EquivariantAutoencoder(ModuleAttrMixin):
         self.encoder = EquivResEnc96to24(obs_channels, lats_channels, initialize, N, NUM_CHANNEL_1, NUM_CHANNEL_2)
         self.decoder = EquivResDec24to96(lats_channels, obs_channels, initialize, N, NUM_CHANNEL_1, NUM_CHANNEL_2)
         self.normalizer = LinearNormalizer()
+
+        self.obs_channels = obs_channels
+        self.lats_channels = lats_channels
     
     def encode(self, obs):
         if isinstance(obs, nn.GeometricTensor):
@@ -65,7 +68,7 @@ class EquivariantAutoencoder(ModuleAttrMixin):
 class Autoencoder(ModuleAttrMixin):
     def __init__(self,
                  obs_channels=3,
-                 lats_channels=3,
+                 lats_channels=1,
                  NUM_CHANNEL_1=32,
                  NUM_CHANNEL_2=64
                  ):
@@ -73,6 +76,9 @@ class Autoencoder(ModuleAttrMixin):
         self.encoder = ResEnc96to24(obs_channels, lats_channels, NUM_CHANNEL_1, NUM_CHANNEL_2)
         self.decoder = ResDec24to96(lats_channels, obs_channels, NUM_CHANNEL_1, NUM_CHANNEL_2)
         self.normalizer = LinearNormalizer()
+
+        self.obs_channels = obs_channels
+        self.lats_channels = lats_channels
     
     def encode(self, obs):
         return self.encoder(obs)
