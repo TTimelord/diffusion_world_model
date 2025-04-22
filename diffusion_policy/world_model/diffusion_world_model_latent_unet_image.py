@@ -54,7 +54,7 @@ class DiffusionWorldModelImageLatentUnet(BaseWorldModel):
         # freeze the autoencoder
         self.auto_encoder = auto_encoder
         checkpoint = torch.load(pretrained_auto_encoder_path, map_location=self.device)
-        missing, unexpected = self.auto_encoder.load_state_dict(checkpoint["state_dicts"]["model"], strict=False)
+        missing, unexpected = self.auto_encoder.load_state_dict(checkpoint["state_dicts"]["model"], strict=True)
         self.auto_encoder.to(self.device)
         for param in self.auto_encoder.parameters():
             param.detach_()  # detach from any graph
@@ -146,6 +146,16 @@ class DiffusionWorldModelImageLatentUnet(BaseWorldModel):
                 latent_history = last_latent
                 latent_history = rearrange(latent_history, 'B T C H W -> (B T) C H W')
                 B = obs_dict['image'].shape[0]
+
+            # # debug
+            # predicted = self.auto_encoder.decode(latent_history)
+            # predicted = rearrange(predicted, '(B T) C H W -> B T C H W', B=B, T=self.n_obs_steps)[:, -1:, :,:,:]
+            # unnormalized_predicted = self.normalizer['image'].unnormalize(predicted)
+
+            # return {
+            #     "predicted_future": unnormalized_predicted,
+            #     "new_latent_history": None,
+            # }
 
             nactions = self.normalizer['action'].normalize(action)
             action_seq = nactions  # shape (B, n_future_steps, Da)
