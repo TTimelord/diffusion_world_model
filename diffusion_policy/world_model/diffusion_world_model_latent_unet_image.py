@@ -118,7 +118,7 @@ class DiffusionWorldModelImageLatentUnet(BaseWorldModel):
         self.normalizer = LinearNormalizer()
         self.n_obs_steps = n_obs_steps
 
-    def predict_future(self, obs_dict: Dict[str, torch.Tensor], action) -> Dict[str, torch.Tensor]:
+    def predict_future(self, obs_dict: Dict[str, torch.Tensor], action, last_latent = None) -> Dict[str, torch.Tensor]:
         """
         Inference method:
           - 'obs_dict' should contain "obs" => (B, n_obs_steps, C, H, W)
@@ -126,19 +126,26 @@ class DiffusionWorldModelImageLatentUnet(BaseWorldModel):
           - returns a dict with "predicted_future" => (B, n_future_steps, C, H, W)
         """
         with torch.inference_mode():
-            nobs = self.normalizer.normalize(obs_dict)
+            if last_latent is None:
+                nobs = self.normalizer.normalize(obs_dict)
+                history_imgs = nobs['image']  # shape (B, n_obs_steps, C, H, W)
+
+                B, To, C, H, W = history_imgs.shape
+                assert To == self.n_obs_steps, f"Expected n_obs_steps={self.n_obs_steps}, got {To}."
+
+                # encode
+                history_imgs = rearrange(history_imgs, 'B T C H W -> (B T) C H W')
+                latent_history = self.auto_encoder.encode(history_imgs)
+            else:
+                latent_history = last_latent
+                latent_history = rearrange(latent_history, 'B T C H W -> (B T) C H W')
+                B = obs_dict['image'].shape[0]
+
             nactions = self.normalizer['action'].normalize(action)
-            history_imgs = nobs['image']  # shape (B, n_obs_steps, C, H, W)
             action_seq = nactions  # shape (B, n_future_steps, Da)
-            device = history_imgs.device
-            dtype = history_imgs.dtype
 
-            B, To, C, H, W = history_imgs.shape
-            assert To == self.n_obs_steps, f"Expected n_obs_steps={self.n_obs_steps}, got {To}."
-
-            # encode
-            history_imgs = rearrange(history_imgs, 'B T C H W -> (B T) C H W')
-            latent_history = self.auto_encoder.encode(history_imgs)
+            device = latent_history.device
+            dtype = latent_history.dtype
             _, C_latent, H_latent, W_latent = latent_history.shape
 
             # Start from random noise
@@ -173,8 +180,12 @@ class DiffusionWorldModelImageLatentUnet(BaseWorldModel):
             predicted = rearrange(predicted, '(B T) C H W -> B T C H W', B=B, T=self.n_future_steps)
             unnormalized_predicted = self.normalizer['image'].unnormalize(predicted)
 
+            latent_history = rearrange(latent_history, 'B (T C) H W -> B T C H W', T=self.n_obs_steps)
+            noisy_latent = rearrange(noisy_latent, '(B T) C H W -> B T C H W', B=B, T=self.n_future_steps)
+
         return {
-            "predicted_future": unnormalized_predicted
+            "predicted_future": unnormalized_predicted,
+            "new_latent_history": torch.cat((latent_history[:, 1:, :, :, :], noisy_latent), dim=1),
         }
 
     def set_normalizer(self, normalizer: LinearNormalizer):

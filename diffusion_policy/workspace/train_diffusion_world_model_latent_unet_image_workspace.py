@@ -23,6 +23,7 @@ import numpy as np
 import shutil
 from diffusion_policy.workspace.base_workspace import BaseWorkspace
 from diffusion_policy.world_model.diffusion_world_model_unet_image import DiffusionWorldModelImageUnet
+from diffusion_policy.world_model.diffusion_world_model_latent_unet_image import DiffusionWorldModelImageLatentUnet
 from diffusion_policy.dataset.base_dataset import BaseImageDataset
 from diffusion_policy.dataset.pusht_image_dataset import PushTImageDataset
 from diffusion_policy.env_runner.base_image_runner import BaseImageRunner
@@ -48,9 +49,9 @@ class TrainDiffusionWorldModelUnetImageWorkspace(BaseWorkspace):
         random.seed(seed)
 
         # configure model
-        self.model: DiffusionWorldModelImageUnet = hydra.utils.instantiate(cfg.world_model)
+        self.model: DiffusionWorldModelImageLatentUnet = hydra.utils.instantiate(cfg.world_model)
 
-        self.ema_model: DiffusionWorldModelImageUnet = None
+        self.ema_model: DiffusionWorldModelImageLatentUnet = None
         if cfg.training.use_ema:
             self.ema_model = copy.deepcopy(self.model)
 
@@ -295,10 +296,13 @@ class TrainDiffusionWorldModelUnetImageWorkspace(BaseWorkspace):
                             for i in range(world_model.n_obs_steps):
                                 image = dataset.replay_buffer['img'][start_idx + i]
                                 self.video_recoder.write_frame(image.astype(np.uint8))
+                            last_latent = None
                             for i in tqdm.trange(episode_length - world_model.n_obs_steps):
                                 action = dataset.replay_buffer['action'][start_idx + i:start_idx + i + world_model.n_obs_steps + world_model.n_future_steps - 1]
                                 action = torch.tensor(action, dtype=torch.float32).to(device)
-                                predicted_images = world_model.predict_future(predicted_image_history, action)["predicted_future"] # B, T, C, H, W
+                                predicted_results = world_model.predict_future(predicted_image_history, action, last_latent) # B, T, C, H, W
+                                predicted_images = predicted_results['predicted_future']
+                                last_latent = predicted_results['new_latent_history']
                                 # append the first predicted image to update predicted_image_history
                                 predicted_image_history['image'] = torch.cat([predicted_image_history['image'][:, 1:], predicted_images], dim=1)
                                 unnormalized_images = predicted_images[0]
