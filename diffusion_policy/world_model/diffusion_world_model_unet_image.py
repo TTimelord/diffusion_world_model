@@ -83,7 +83,7 @@ class DiffusionWorldModelImageUnet(BaseWorldModel):
         )
 
         self.norm_out = GroupNorm(channels[0])
-        self.conv_out = Conv3x3(channels[0], img_channels)
+        self.conv_out = Conv3x3(channels[0], n_future_steps * img_channels)
         nn.init.zeros_(self.conv_out.weight)
 
         trainable_params = sum(p.numel() for p in self.unet.parameters() if p.requires_grad)
