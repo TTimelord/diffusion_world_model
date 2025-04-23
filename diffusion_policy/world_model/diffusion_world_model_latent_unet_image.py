@@ -104,7 +104,7 @@ class DiffusionWorldModelImageLatentUnet(BaseWorldModel):
         )
 
         self.norm_out = GroupNorm(channels[0])
-        self.conv_out = Conv3x3(channels[0], lats_channels)
+        self.conv_out = Conv3x3(channels[0], n_future_steps * lats_channels)
         nn.init.zeros_(self.conv_out.weight)
 
         trainable_params = sum(p.numel() for p in self.unet.parameters() if p.requires_grad)
@@ -201,7 +201,7 @@ class DiffusionWorldModelImageLatentUnet(BaseWorldModel):
 
         return {
             "predicted_future": unnormalized_predicted,
-            "new_latent_history": torch.cat((latent_history[:, 1:, :, :, :], noisy_latent), dim=1),
+            "new_latent_history": torch.cat((latent_history[:, 1:], noisy_latent[:, :1]), dim=1),
         }
 
     def set_normalizer(self, normalizer: LinearNormalizer):

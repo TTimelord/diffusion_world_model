@@ -10,7 +10,7 @@ shape_meta: ${task.shape_meta}
 exp_name: "default"
 
 n_obs_steps: 4
-n_future_steps: 1
+n_future_steps: 3
 horizon: ${eval:'${n_obs_steps}+${n_future_steps}'}
 dataset_obs_steps: ${n_obs_steps}
 obs_as_global_cond: True
@@ -51,7 +51,6 @@ world_model:
 
   # scheduler.step params
   # predict_epsilon: True
-
 
 ema:
   _target_: diffusion_policy.model.diffusion.ema_model.EMAModel
@@ -98,9 +97,9 @@ training:
   freeze_encoder: False
   # training loop control
   # in epochs
-  rollout_every: 10
+  rollout_every: 20
   num_rollouts: 2
-  checkpoint_every: 10
+  checkpoint_every: 20
   val_every: 5
   sample_every: 5
   # steps per epoch
