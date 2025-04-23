@@ -8,7 +8,6 @@ from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
 from diffusion_policy.model.common.normalizer import LinearNormalizer
 from diffusion_policy.model.common.module_attr_mixin import ModuleAttrMixin
 from diffusion_policy.world_model.base_world_model import BaseWorldModel
-from diffusion_policy.model.vision.multi_image_obs_encoder import MultiImageObsEncoder
 from diffusion_policy.common.pytorch_util import dict_apply
 
 # Example diffusion model architecture
@@ -28,7 +27,6 @@ class DiffusionWorldModelImageUnet(BaseWorldModel):
     def __init__(self,
                  shape_meta: dict,
                  noise_scheduler: DDPMScheduler,
-                 obs_encoder: MultiImageObsEncoder,
                  n_obs_steps: int,
                  n_future_steps : int = 1,
                  num_inference_steps=None,
@@ -66,7 +64,7 @@ class DiffusionWorldModelImageUnet(BaseWorldModel):
             nn.Linear(cond_channels * 4, cond_channels),
         )
         self.act_proj = nn.Sequential(
-            nn.Linear(action_dim * (n_obs_steps+n_future_steps-1), cond_channels),
+            nn.Linear(action_dim * (n_future_steps), cond_channels),
             nn.SiLU(),
             nn.Linear(cond_channels, cond_channels),
         )
@@ -125,7 +123,7 @@ class DiffusionWorldModelImageUnet(BaseWorldModel):
 
             # Start from random noise
             # If you want the model to be deterministic, consider using zero noise
-            noisy_image = torch.randn((B, self.n_future_steps * C, H, W), device=device, dtype=dtype)
+            noisy_image = torch.zeros((B, self.n_future_steps * C, H, W), device=device, dtype=dtype)
 
             # set up timesteps
             self.noise_scheduler.set_timesteps(self.num_inference_steps, device=device)
@@ -178,7 +176,7 @@ class DiffusionWorldModelImageUnet(BaseWorldModel):
         imgs = nobs['image']
         history_imgs = imgs[:, :self.n_obs_steps]
         future_imgs = imgs[:, self.n_obs_steps:self.n_obs_steps+self.n_future_steps]
-        action_seq = nactions[:, :self.n_obs_steps+self.n_future_steps-1]
+        action_seq = nactions[:, self.n_obs_steps-1:self.n_obs_steps+self.n_future_steps-1]
 
         B, T, C, H, W = future_imgs.shape
         assert T == self.n_future_steps, f"Expected n_future_steps={self.n_future_steps}, got {T}."
