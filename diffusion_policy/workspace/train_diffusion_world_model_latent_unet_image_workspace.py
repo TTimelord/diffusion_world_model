@@ -249,7 +249,7 @@ class TrainDiffusionWorldModelUnetImageWorkspace(BaseWorkspace):
                 world_model.eval()
 
                 # run rollout
-                if (self.epoch % cfg.training.rollout_every) == 0:
+                if self.epoch>0 and (self.epoch % cfg.training.rollout_every) == 0:
                     gt_video_path_list = []
                     predict_video_path_list = []
                     with torch.inference_mode():
@@ -298,7 +298,7 @@ class TrainDiffusionWorldModelUnetImageWorkspace(BaseWorkspace):
                                 self.video_recoder.write_frame(image.astype(np.uint8))
                             last_latent = None
                             for i in tqdm.trange(episode_length - world_model.n_obs_steps):
-                                action = dataset.replay_buffer['action'][start_idx + i:start_idx + i + world_model.n_obs_steps + world_model.n_future_steps - 1]
+                                action = dataset.replay_buffer['action'][start_idx + i + world_model.n_obs_steps - 1:start_idx + i + world_model.n_obs_steps + world_model.n_future_steps - 1]
                                 action = torch.tensor(action, dtype=torch.float32).to(device)
                                 predicted_results = world_model.predict_future(predicted_image_history, action, last_latent) # B, T, C, H, W
                                 predicted_images = predicted_results['predicted_future']
@@ -349,7 +349,7 @@ class TrainDiffusionWorldModelUnetImageWorkspace(BaseWorkspace):
                         target_future_images = obs_dict['image'][:,self.model.n_obs_steps:self.model.n_obs_steps+self.model.n_future_steps,...]
                         history_obs_dict = dict_apply(obs_dict, lambda x: x[:,:self.model.n_obs_steps,...])
                         gt_action = batch['action']
-                        future_action = gt_action[:,:self.model.n_obs_steps+self.model.n_future_steps-1,...]
+                        future_action = gt_action[:,self.model.n_obs_steps-1:self.model.n_obs_steps+self.model.n_future_steps-1,...]
                         
                         result = world_model.predict_future(history_obs_dict, future_action)
                         pred_future_images = result["predicted_future"]

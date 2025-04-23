@@ -85,7 +85,7 @@ class DiffusionWorldModelImageLatentUnet(BaseWorldModel):
             nn.Linear(cond_channels * 4, cond_channels),
         )
         self.act_proj = nn.Sequential(
-            nn.Linear(action_dim * (n_obs_steps+n_future_steps-1), cond_channels),
+            nn.Linear(action_dim * (n_future_steps), cond_channels),
             nn.SiLU(),
             nn.Linear(cond_channels, cond_channels),
         )
@@ -226,7 +226,7 @@ class DiffusionWorldModelImageLatentUnet(BaseWorldModel):
         imgs = nobs['image']
         history_imgs = imgs[:, :self.n_obs_steps]
         future_imgs = imgs[:, self.n_obs_steps:self.n_obs_steps+self.n_future_steps]
-        action_seq = nactions[:, :self.n_obs_steps+self.n_future_steps-1]
+        action_seq = nactions[:, self.n_obs_steps-1:self.n_obs_steps+self.n_future_steps-1]
 
         B, Tf, C, H, W = future_imgs.shape
         assert Tf == self.n_future_steps, f"Expected n_future_steps={self.n_future_steps}, got {Tf}."

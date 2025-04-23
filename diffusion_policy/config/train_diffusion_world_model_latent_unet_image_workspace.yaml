@@ -44,7 +44,7 @@ world_model:
   num_inference_steps: 100
   obs_as_global_cond: ${obs_as_global_cond}
   # crop_shape: null
-  cond_channels: 256
+  cond_channels: 64
   depths: [2,2,2,2]
   channels: [64,64,64,64]
   attn_depths: [0,0,0,0]
@@ -90,7 +90,7 @@ training:
   # optimization
   lr_scheduler: cosine
   lr_warmup_steps: 500
-  num_epochs: 300
+  num_epochs: 1000
   gradient_accumulate_every: 1
   # EMA destroys performance when used with BatchNorm
   # replace BatchNorm with GroupNorm.
@@ -120,10 +120,10 @@ logging:
 
 checkpoint:
   topk:
-    monitor_key: test_mse
+    monitor_key: val_loss
     mode: min
     k: 5
-    format_str: 'epoch={epoch:04d}-test_mse={test_mse:.3f}.ckpt'
+    format_str: 'epoch={epoch:04d}-val_loss={val_loss:.3f}.ckpt'
   save_last_ckpt: True
   save_last_snapshot: False
 
