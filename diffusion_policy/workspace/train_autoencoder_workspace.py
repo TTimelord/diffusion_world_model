@@ -240,7 +240,10 @@ class TrainAutoencoderWorkspace(BaseWorkspace):
                             batch = {'image': images}
                             nobs = self.model.normalizer.normalize(batch)
                             gts = nobs['image']
-                            reconstructions = self.model.decode(self.model.encode(gts))
+                            latent = self.model.encode(gts)
+                            if isinstance(latent, tuple):
+                                latent = latent[0]
+                            reconstructions = self.model.decode(latent)
                             for idx, gt in enumerate(list(gts)):
                                 save_image(gt, pathlib.Path(self.output_dir).joinpath(
                                 'media', f"{self.epoch}_train_gt_{wv.util.generate_id()}.jpg"))
@@ -285,7 +288,10 @@ class TrainAutoencoderWorkspace(BaseWorkspace):
                             batch = {'image': images}
                             nobs = self.model.normalizer.normalize(batch)
                             gts = nobs['image']
-                            reconstructions = self.model.decode(self.model.encode(gts))
+                            latent = self.model.encode(gts)
+                            if isinstance(latent, tuple):
+                                latent = latent[0]
+                            reconstructions = self.model.decode(latent)
                             for idx, gt in enumerate(list(gts)):
                                 save_image(gt, pathlib.Path(self.output_dir).joinpath(
                                 'media', f"{self.epoch}_val_gt_{wv.util.generate_id()}.jpg"))

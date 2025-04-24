@@ -1,0 +1,104 @@
+defaults:
+  - _self_
+  - task: pusht_image_world_model
+
+name: train_VAE_96to12_beta_0.01
+_target_: diffusion_policy.workspace.train_autoencoder_workspace.TrainAutoencoderWorkspace
+
+task_name: ${task.name}
+shape_meta: ${task.shape_meta}
+exp_name: "default"
+
+n_obs_steps: 1
+n_future_steps: 0
+horizon: ${eval:'${n_obs_steps}+${n_future_steps}'}
+dataset_obs_steps: ${n_obs_steps}
+
+finetune: false
+autoencoder:
+  _target_: diffusion_policy.model.equi.general_autoencoder.VAE
+  obs_channels: 3
+  lats_channels: 1
+  encoder_channels: [64, 64, 64, 64]
+  decoder_channels: [64, 64, 64, 64]
+  beta: 0.01
+
+dataloader:
+  batch_size: 32
+  num_workers: 8
+  shuffle: True
+  pin_memory: True
+  persistent_workers: False
+
+val_dataloader:
+  batch_size: 64
+  num_workers: 8
+  shuffle: False
+  pin_memory: True
+  persistent_workers: False
+
+optimizer:
+  _target_: torch.optim.AdamW
+  lr: 1.0e-4
+  betas: [0.95, 0.999]
+  eps: 1.0e-8
+  weight_decay: 1.0e-6
+
+training:
+  device: "cuda:0"
+  seed: 42
+  debug: False
+  resume: True
+  ckpt_tag: 'latest'
+  # optimization
+  lr_scheduler: cosine
+  lr_warmup_steps: 500
+  num_epochs: 1000
+  gradient_accumulate_every: 1
+  # EMA destroys performance when used with BatchNorm
+  # replace BatchNorm with GroupNorm.
+  use_ema: False
+  freeze_encoder: False
+  # training loop control
+  # in epochs
+  rollout_every: 5
+  num_rollouts: 2
+  checkpoint_every: 20
+  val_every: 5
+  sample_every: 5
+  # steps per epoch
+  max_train_steps: null
+  max_val_steps: null
+  # misc
+  tqdm_interval_sec: 1.0
+
+logging:
+  project: diffusion_world_model
+  resume: True
+  mode: online
+  name: ${name}_${now:%Y.%m.%d-%H.%M.%S}
+  tags: ["${name}", "${task_name}", "${exp_name}"]
+  id: null
+  group: autoencoder
+
+checkpoint:
+  topk:
+    monitor_key: val_loss
+    mode: min
+    k: 5
+    format_str: 'epoch={epoch:04d}-val_loss={val_loss:.3f}.ckpt'
+  save_last_ckpt: True
+  save_last_snapshot: False
+
+multi_run:
+  run_dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
+  wandb_name_base: ${now:%Y.%m.%d-%H.%M.%S}_${name}_${task_name}
+
+hydra:
+  job:
+    override_dirname: ${name}
+  run:
+    dir: data/outputs/autoencoder/${name} #data/output/autoencoder/${autoencoder.lats_channels}_${autoencoder.NUM_CHANNEL_1}_${autoencoder.NUM_CHANNEL_2}/
+  sweep:
+    dir: data/outputs/autoencoder/${name} #data/output/autoencoder/${autoencoder.lats_channels}_${autoencoder.NUM_CHANNEL_1}_${autoencoder.NUM_CHANNEL_2}/
+    subdir: ${hydra.job.num}
