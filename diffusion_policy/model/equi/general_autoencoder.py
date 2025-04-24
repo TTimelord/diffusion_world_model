@@ -10,14 +10,14 @@ class Autoencoder(ModuleAttrMixin):
                  obs_channels=3,
                  lats_channels=1,
                  encoder_channels=[8, 16, 32, 16, 8],
-                 decode_channels=[8, 16, 32, 16, 8],
+                 decoder_channels=[8, 16, 32, 16, 8],
                  l2_loss_weight=0.00001,
                  recursive_steps=1,
                  recursive_weight=0.5,
                  ):
         super().__init__()
         self.encoder = ResEncoder(obs_channels, lats_channels, encoder_channels)
-        self.decoder = ResDecoder(lats_channels, obs_channels, decode_channels)
+        self.decoder = ResDecoder(lats_channels, obs_channels, decoder_channels)
         self.normalizer = LinearNormalizer()
 
         self.obs_channels = obs_channels
