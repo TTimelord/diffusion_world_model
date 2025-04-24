@@ -64,9 +64,6 @@ class DiffusionWorldModelImageLatentUnet(BaseWorldModel):
         self.auto_encoder.eval()
         self.auto_encoder.requires_grad_(False)
 
-        print(f"Missing keys: {missing}")
-        print(f"Unexpected keys: {unexpected}")
-
         lats_channels: int = self.auto_encoder.lats_channels
 
         # get feature dim

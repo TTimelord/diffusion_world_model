@@ -27,8 +27,8 @@ world_model:
     beta_end: 0.02
     beta_schedule: squaredcos_cap_v2
     variance_type: fixed_small # Yilun's paper uses fixed_small_log instead, but easy to cause Nan
-    clip_sample: True # required when predict_epsilon=False
-    prediction_type: epsilon # or sample
+    clip_sample: False # required when predict_epsilon=False
+    prediction_type: sample # epsilon or sample
 
   auto_encoder:
     _target_: diffusion_policy.model.equi.equi_obs_autoencoder.EquivariantAutoencoder
@@ -37,7 +37,7 @@ world_model:
     NUM_CHANNEL_1: 32
     NUM_CHANNEL_2: 64
     N: 4    
-  pretrained_auto_encoder_path: /home/lma326/courses/deep_learning/dl_project/diffusion_world_model/data/output/EquivariantAutoencoder_trvial/1_32_64/checkpoints/latest.ckpt
+  pretrained_auto_encoder_path: ./data/outputs/EquivariantAutoencoder_trvial/${world_model.auto_encoder.lats_channels}_${world_model.auto_encoder.NUM_CHANNEL_1}_${world_model.auto_encoder.NUM_CHANNEL_2}/checkpoints/latest.ckpt
 
   n_obs_steps: ${n_obs_steps}
   n_future_steps: ${n_future_steps}
@@ -95,7 +95,7 @@ training:
   # EMA destroys performance when used with BatchNorm
   # replace BatchNorm with GroupNorm.
   use_ema: True
-  freeze_encoder: False
+  freeze_encoder: True
   # training loop control
   # in epochs
   rollout_every: 10
@@ -135,7 +135,7 @@ hydra:
   job:
     override_dirname: ${name}
   run:
-    dir: data/outputs/equi_latent_unet_image/${now:%Y.%m.%d}/${now:%H.%M.%S}
+    dir: data/outputs/equi_latent_unet_image/${world_model.noise_scheduler.prediction_type}/
   sweep:
-    dir: data/outputs/equi_latent_unet_image/${now:%Y.%m.%d}/${now:%H.%M.%S}
+    dir: data/outputs/equi_latent_unet_image/${world_model.noise_scheduler.prediction_type}/
     subdir: ${hydra.job.num}
