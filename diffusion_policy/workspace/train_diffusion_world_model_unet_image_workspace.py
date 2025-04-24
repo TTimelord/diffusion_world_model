@@ -136,6 +136,10 @@ class TrainDiffusionWorldModelUnetImageWorkspace(BaseWorkspace):
             }
         )
 
+        # create media directory
+        media_dir = os.path.join(self.output_dir, 'media')
+        os.makedirs(media_dir, exist_ok=True)
+
         # configure checkpoint
         topk_manager = TopKCheckpointManager(
             save_dir=os.path.join(self.output_dir, 'checkpoints'),
@@ -156,6 +160,7 @@ class TrainDiffusionWorldModelUnetImageWorkspace(BaseWorkspace):
             cfg.training.num_epochs = 2
             cfg.training.max_train_steps = 3
             cfg.training.max_val_steps = 3
+            cfg.training.num_rollouts = 1
             cfg.training.rollout_every = 1
             cfg.training.checkpoint_every = 1
             cfg.training.val_every = 1
@@ -247,7 +252,7 @@ class TrainDiffusionWorldModelUnetImageWorkspace(BaseWorkspace):
                 world_model.eval()
 
                 # run rollout
-                if (self.epoch % cfg.training.rollout_every) == 0:
+                if self.epoch>0 and (self.epoch % cfg.training.rollout_every) == 0:
                     gt_video_path_list = []
                     predict_video_path_list = []
                     with torch.inference_mode():
@@ -294,12 +299,12 @@ class TrainDiffusionWorldModelUnetImageWorkspace(BaseWorkspace):
                             for i in range(world_model.n_obs_steps):
                                 image = dataset.replay_buffer['img'][start_idx + i]
                                 self.video_recoder.write_frame(image.astype(np.uint8))
-                            for i in range(episode_length - world_model.n_obs_steps):
-                                action = dataset.replay_buffer['action'][start_idx + i:start_idx + i + world_model.n_obs_steps + world_model.n_future_steps - 1]
+                            for i in tqdm.trange(episode_length - world_model.n_obs_steps):
+                                action = dataset.replay_buffer['action'][start_idx + i + world_model.n_obs_steps - 1:start_idx + i + world_model.n_obs_steps + world_model.n_future_steps - 1]
                                 action = torch.tensor(action, dtype=torch.float32).to(device)
                                 predicted_images = world_model.predict_future(predicted_image_history, action)["predicted_future"] # B, T, C, H, W
                                 # append the first predicted image to update predicted_image_history
-                                predicted_image_history['image'] = torch.cat([predicted_image_history['image'][:, 1:], predicted_images], dim=1)
+                                predicted_image_history['image'] = torch.cat([predicted_image_history['image'][:, 1:], predicted_images[:, :1]], dim=1)
                                 unnormalized_images = predicted_images[0]
                                 unnormalized_images = torch.moveaxis(unnormalized_images, 1, -1)
                                 predicted_image_trajectory[i + world_model.n_obs_steps] = unnormalized_images[0]
@@ -344,7 +349,7 @@ class TrainDiffusionWorldModelUnetImageWorkspace(BaseWorkspace):
                         target_future_images = obs_dict['image'][:,self.model.n_obs_steps:self.model.n_obs_steps+self.model.n_future_steps,...]
                         history_obs_dict = dict_apply(obs_dict, lambda x: x[:,:self.model.n_obs_steps,...])
                         gt_action = batch['action']
-                        future_action = gt_action[:,:self.model.n_obs_steps+self.model.n_future_steps-1,...]
+                        future_action = gt_action[:,self.model.n_obs_steps-1:self.model.n_obs_steps+self.model.n_future_steps-1,...]
                         
                         result = world_model.predict_future(history_obs_dict, future_action)
                         pred_future_images = result["predicted_future"]

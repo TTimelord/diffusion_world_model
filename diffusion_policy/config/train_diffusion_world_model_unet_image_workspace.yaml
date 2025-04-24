@@ -10,7 +10,7 @@ shape_meta: ${task.shape_meta}
 exp_name: "default"
 
 n_obs_steps: 4
-n_future_steps: 1
+n_future_steps: 3
 horizon: ${eval:'${n_obs_steps}+${n_future_steps}'}
 dataset_obs_steps: ${n_obs_steps}
 obs_as_global_cond: True
@@ -30,26 +30,12 @@ world_model:
     clip_sample: True # required when predict_epsilon=False
     prediction_type: epsilon # or sample
 
-  obs_encoder:
-    _target_: diffusion_policy.model.vision.multi_image_obs_encoder.MultiImageObsEncoder
-    shape_meta: ${shape_meta}
-    rgb_model:
-      _target_: diffusion_policy.model.vision.model_getter.get_resnet
-      name: resnet18
-      weights: null
-    resize_shape: null
-    # constant center crop
-    random_crop: False
-    use_group_norm: True
-    share_rgb_model: False
-    imagenet_norm: True
-
   n_obs_steps: ${n_obs_steps}
   n_future_steps: ${n_future_steps}
   num_inference_steps: 100
   obs_as_global_cond: ${obs_as_global_cond}
   # crop_shape: null
-  cond_channels: 256
+  cond_channels: 64
   depths: [2,2,2,2]
   channels: [64,64,64,64]
   attn_depths: [0,0,0,0]
@@ -67,14 +53,14 @@ ema:
 
 dataloader:
   batch_size: 32
-  num_workers: 4
+  num_workers: 8
   shuffle: True
   pin_memory: True
   persistent_workers: False
 
 val_dataloader:
   batch_size: 32
-  num_workers: 4
+  num_workers: 8
   shuffle: False
   pin_memory: True
   persistent_workers: False
@@ -94,7 +80,7 @@ training:
   # optimization
   lr_scheduler: cosine
   lr_warmup_steps: 500
-  num_epochs: 300
+  num_epochs: 500
   gradient_accumulate_every: 1
   # EMA destroys performance when used with BatchNorm
   # replace BatchNorm with GroupNorm.
@@ -102,10 +88,10 @@ training:
   freeze_encoder: False
   # training loop control
   # in epochs
-  rollout_every: 5
-  num_rollouts: 1
-  checkpoint_every: 5
-  val_every: 1
+  rollout_every: 20
+  num_rollouts: 2
+  checkpoint_every: 20
+  val_every: 5
   sample_every: 1
   # steps per epoch
   max_train_steps: null
@@ -117,17 +103,17 @@ logging:
   project: diffusion_world_model
   resume: True
   mode: online
-  name: ${now:%Y.%m.%d-%H.%M.%S}_${name}_${task_name}
+  name: ${name}_${now:%Y.%m.%d-%H.%M.%S}
   tags: ["${name}", "${task_name}", "${exp_name}"]
   id: null
-  group: null
+  group: unet_image
 
 checkpoint:
   topk:
-    monitor_key: test_mse
+    monitor_key: val_loss
     mode: min
     k: 5
-    format_str: 'epoch={epoch:04d}-test_mse={test_mse:.3f}.ckpt'
+    format_str: 'epoch={epoch:04d}-val_loss={val_loss:.3f}.ckpt'
   save_last_ckpt: True
   save_last_snapshot: False
 
@@ -139,7 +125,7 @@ hydra:
   job:
     override_dirname: ${name}
   run:
-    dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
+    dir: data/outputs/unet_image/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
   sweep:
-    dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
+    dir: data/outputs/unet_image/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
     subdir: ${hydra.job.num}

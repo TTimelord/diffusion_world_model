@@ -264,26 +264,28 @@ class TrainDiffusionWorldModelUnetKeypointWorkspace(BaseWorkspace):
 
                             # video_writer
                             gt_keyp_filename = pathlib.Path(self.output_dir).joinpath(
-                            'media', wv.util.generate_id() + ".mp4")
+                            'media', wv.util.generate_id() + "_keyp_gt.mp4")
                             gt_keyp_filename.parent.mkdir(parents=False, exist_ok=True)
                             gt_keyp_filename = str(gt_keyp_filename)
                             gt_keyp_video_path_list.append(gt_keyp_filename)
 
                             gt_img_filename = pathlib.Path(self.output_dir).joinpath(
-                            'media', wv.util.generate_id() + ".mp4")
+                            'media', wv.util.generate_id() + "_img_gt.mp4")
                             gt_img_filename.parent.mkdir(parents=False, exist_ok=True)
                             gt_img_filename = str(gt_img_filename)
                             gt_video_path_list.append(gt_img_filename)
 
                             predict_filename = pathlib.Path(self.output_dir).joinpath(
-                            'media', wv.util.generate_id() + ".mp4")
+                            'media', wv.util.generate_id() + "_keyp_pred.mp4")
                             predict_filename.parent.mkdir(parents=False, exist_ok=True)
                             predict_filename = str(predict_filename) 
                             predict_video_path_list.append(predict_filename)
 
                             # image trajectory for calcualting mse
                             gt_block_keyp_trajectory = torch.tensor(dataset.replay_buffer['keypoint'][start_idx:start_idx + episode_length], dtype=torch.float32)
+                            print('gt_block_keyp_trajectory', gt_block_keyp_trajectory.shape)
                             gt_agent_keyp_trajectory = torch.tensor(dataset.replay_buffer['state'][start_idx:start_idx + episode_length, :2], dtype=torch.float32).unsqueeze(1)
+                            print('gt_agent_keyp_trajectory', gt_agent_keyp_trajectory.shape)
                             gt_keyp_trajectory = torch.cat([gt_block_keyp_trajectory, gt_agent_keyp_trajectory], dim=-2)
                             gt_keyp_trajectory_np = gt_keyp_trajectory.cpu().numpy()
                             
@@ -305,9 +307,12 @@ class TrainDiffusionWorldModelUnetKeypointWorkspace(BaseWorkspace):
                             self.video_recoder.stop()
 
                             # predicted video
-                            keyp_history = dataset._sample_to_data(dataset.replay_buffer)['obs'][start_idx + i:start_idx + i + world_model.n_obs_steps]
+                            print('predicted_keyp_trajectory', predicted_keyp_trajectory.shape)
+                            keyp_history = predicted_keyp_trajectory[:world_model.n_obs_steps]
+                            print('keyp_history', keyp_history.shape)
+                            # dataset._sample_to_data(dataset.replay_buffer)['obs'][start_idx + i:start_idx + i + world_model.n_obs_steps]
                             predicted_keyp_history = {
-                                "obs": torch.tensor(keyp_history, dtype=torch.float32).to(device).unsqueeze(0)
+                                "obs": torch.tensor(keyp_history, dtype=torch.float32).to(device).view(keyp_history.shape[0], -1).unsqueeze(0)# 1, 4, 20
                             }
                             self.video_recoder.start(predict_filename)
                             for i in range(self.model.n_obs_steps):
@@ -319,10 +324,8 @@ class TrainDiffusionWorldModelUnetKeypointWorkspace(BaseWorkspace):
                                 predicted_keyp = world_model.predict_future(predicted_keyp_history, action)["predicted_future"] # B, T, C, H, W
                                 # append the first predicted image to update predicted_image_history
                                 predicted_keyp_history['obs'] = torch.cat([predicted_keyp_history['obs'][:, 1:], predicted_keyp], dim=1)
-                                unnormalized_keyps = normalizer['obs'].unnormalize(predicted_keyp[0])
-                                # unnormalized_keyps = torch.moveaxis(unnormalized_keyps, 1, -1)
-                                predicted_keyp_trajectory[i + world_model.n_obs_steps] = unnormalized_keyps.reshape(-1, 2)
-                                unnormalized_keyps = (unnormalized_keyps.detach().cpu().numpy())
+                                predicted_keyp_trajectory[i + world_model.n_obs_steps] = predicted_keyp[0].reshape(-1, 2)
+                                unnormalized_keyps = (predicted_keyp[0].detach().cpu().numpy())
                                 self.video_recoder.write_frame((keypoint_to_image(unnormalized_keyps[0]))[:,:,:3])# only use the first frame
                             self.video_recoder.stop()
                         mse_list.append(torch.nn.functional.mse_loss(predicted_keyp_trajectory, gt_keyp_trajectory).item())

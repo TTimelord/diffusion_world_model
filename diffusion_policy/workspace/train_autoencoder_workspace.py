@@ -49,6 +49,9 @@ class TrainAutoencoderWorkspace(BaseWorkspace):
         # configure model
         # self.model = Autoencoder()
         self.model: Autoencoder = hydra.utils.instantiate(cfg.autoencoder)
+        if cfg.finetune:
+            checkpoint = torch.load(self.cfg.pretrained_auto_encoder_path, map_location=self.model.device)
+            missing, unexpected = self.model.load_state_dict(checkpoint["state_dicts"]["model"], strict=True)
 
         self.ema_model: Autoencoder = None
         if cfg.training.use_ema:
@@ -127,6 +130,10 @@ class TrainAutoencoderWorkspace(BaseWorkspace):
             }
         )
 
+        # create media directory
+        media_dir = os.path.join(self.output_dir, 'media')
+        os.makedirs(media_dir, exist_ok=True)
+
         # configure checkpoint
         topk_manager = TopKCheckpointManager(
             save_dir=os.path.join(self.output_dir, 'checkpoints'),
@@ -150,9 +157,9 @@ class TrainAutoencoderWorkspace(BaseWorkspace):
             for local_epoch_idx in range(cfg.training.num_epochs):
                 step_log = dict()
                 # ========= train for this epoch ==========
-                if cfg.training.freeze_encoder:
-                    self.model.obs_encoder.eval()
-                    self.model.obs_encoder.requires_grad_(False)
+                # if cfg.training.freeze_encoder:
+                #     self.model.obs_encoder.eval()
+                #     self.model.obs_encoder.requires_grad_(False)
 
                 train_losses = list()
                 with tqdm.tqdm(train_dataloader, desc=f"Training epoch {self.epoch}", 
@@ -164,7 +171,10 @@ class TrainAutoencoderWorkspace(BaseWorkspace):
                             train_sampling_batch = batch
 
                         # compute loss
-                        raw_loss = self.model.compute_loss(batch)
+                        if cfg.finetune:
+                            raw_loss = self.model.compute_finetune_loss(batch)
+                        else:
+                            raw_loss = self.model.compute_loss(batch)
                         loss = raw_loss / cfg.training.gradient_accumulate_every
                         loss.backward()
 
@@ -230,7 +240,10 @@ class TrainAutoencoderWorkspace(BaseWorkspace):
                             batch = {'image': images}
                             nobs = self.model.normalizer.normalize(batch)
                             gts = nobs['image']
-                            reconstructions = self.model.decode(self.model.encode(gts))
+                            latent = self.model.encode(gts)
+                            if isinstance(latent, tuple):
+                                latent = latent[0]
+                            reconstructions = self.model.decode(latent)
                             for idx, gt in enumerate(list(gts)):
                                 save_image(gt, pathlib.Path(self.output_dir).joinpath(
                                 'media', f"{self.epoch}_train_gt_{wv.util.generate_id()}.jpg"))
@@ -275,7 +288,10 @@ class TrainAutoencoderWorkspace(BaseWorkspace):
                             batch = {'image': images}
                             nobs = self.model.normalizer.normalize(batch)
                             gts = nobs['image']
-                            reconstructions = self.model.decode(self.model.encode(gts))
+                            latent = self.model.encode(gts)
+                            if isinstance(latent, tuple):
+                                latent = latent[0]
+                            reconstructions = self.model.decode(latent)
                             for idx, gt in enumerate(list(gts)):
                                 save_image(gt, pathlib.Path(self.output_dir).joinpath(
                                 'media', f"{self.epoch}_val_gt_{wv.util.generate_id()}.jpg"))

@@ -137,6 +137,10 @@ class TrainDiffusionWorldModelUnetImageWorkspace(BaseWorkspace):
             }
         )
 
+        # create media directory
+        media_dir = os.path.join(self.output_dir, 'media')
+        os.makedirs(media_dir, exist_ok=True)
+
         # configure checkpoint
         topk_manager = TopKCheckpointManager(
             save_dir=os.path.join(self.output_dir, 'checkpoints'),
@@ -304,7 +308,7 @@ class TrainDiffusionWorldModelUnetImageWorkspace(BaseWorkspace):
                                 predicted_images = predicted_results['predicted_future']
                                 last_latent = predicted_results['new_latent_history']
                                 # append the first predicted image to update predicted_image_history
-                                predicted_image_history['image'] = torch.cat([predicted_image_history['image'][:, 1:], predicted_images], dim=1)
+                                predicted_image_history['image'] = torch.cat([predicted_image_history['image'][:, 1:], predicted_images[:, :1]], dim=1)
                                 unnormalized_images = predicted_images[0]
                                 unnormalized_images = torch.moveaxis(unnormalized_images, 1, -1)
                                 predicted_image_trajectory[i + world_model.n_obs_steps] = unnormalized_images[0]

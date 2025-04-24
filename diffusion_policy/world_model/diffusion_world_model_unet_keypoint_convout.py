@@ -117,7 +117,7 @@ class DiffusionWorldModelKeypointUnet(BaseWorldModel):
             action_seq = nactions  # shape (B, n_future_steps, Da)
             device = history_keyp.device
             dtype = history_keyp.dtype
-
+            # print('history_keyp', history_keyp.shape)
             B, To, S = history_keyp.shape
             assert To == self.n_obs_steps, f"Expected n_obs_steps={self.n_obs_steps}, got {To}."
 
@@ -133,23 +133,22 @@ class DiffusionWorldModelKeypointUnet(BaseWorldModel):
             action_seq = action_seq.view(B, -1)
 
             for t in self.noise_scheduler.timesteps:
+                # print('noisy_keyp', noisy_keyp.shape)
                 # forward the model
                 # if torch.is_tensor(t) and len(t.shape) == 0:
                 assert torch.is_tensor(t) and len(t.shape) == 0
                 timesteps = t[None].to(device)
                 timesteps = timesteps.expand(noisy_keyp.shape[0])
 
-                # cond = self.cond_proj(self.diffusion_step_encoder(timesteps) + self.act_proj(action_seq))
-                # print('cond', cond.shape)
                 x = torch.cat((history_keyp, noisy_keyp), dim=1)
                 x = self.unet(x.transpose(1, 2), timesteps, global_cond=action_seq).transpose(1, 2)
                 x = self.conv_out(x)
-                # diffusion update
-                noisy_keyp = self.noise_scheduler.step(
-                    x.transpose(2, 1), t, noisy_keyp
-                ).prev_sample[:, -self.n_future_steps:, :]
 
-            predicted = noisy_keyp.view(B, self.n_future_steps, S)
+                noisy_keyp = self.noise_scheduler.step(
+                    x, t, noisy_keyp
+                ).prev_sample
+
+            predicted = self.normalizer['obs'].unnormalize(noisy_keyp.view(B, self.n_future_steps, S))
 
         return {
             "predicted_future": predicted
@@ -200,10 +199,7 @@ class DiffusionWorldModelKeypointUnet(BaseWorldModel):
 
         # condition
         action_seq = action_seq.reshape(B, -1)
-        # print('history_keyp', history_keyps.shape)
-        # print('noisy_keyp', noisy_x.shape)
         x = torch.cat((history_keyps, noisy_x), dim=1)
-        # print('x', x.shape)
         x = self.unet(x.transpose(1, 2), timesteps, global_cond=action_seq).transpose(1, 2)
         x = self.conv_out(x)
 

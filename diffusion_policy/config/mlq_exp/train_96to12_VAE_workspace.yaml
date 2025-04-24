@@ -2,7 +2,7 @@ defaults:
   - _self_
   - task: pusht_image_world_model
 
-name: train_autoencoder
+name: train_VAE_96to12_beta_0.01_fixed_logvar_0.0
 _target_: diffusion_policy.workspace.train_autoencoder_workspace.TrainAutoencoderWorkspace
 
 task_name: ${task.name}
@@ -16,12 +16,13 @@ dataset_obs_steps: ${n_obs_steps}
 
 finetune: false
 autoencoder:
-  _target_: diffusion_policy.model.equi.equi_obs_autoencoder.Autoencoder
+  _target_: diffusion_policy.model.equi.general_autoencoder.VAE
   obs_channels: 3
   lats_channels: 1
-  NUM_CHANNEL_1: 32
-  NUM_CHANNEL_2: 64
-  l2_loss_weight: 0.05
+  encoder_channels: [64, 64, 64, 64]
+  decoder_channels: [64, 64, 64, 64]
+  beta: 0.01
+  fixed_logvar: 0.0
 
 dataloader:
   batch_size: 32
@@ -61,7 +62,7 @@ training:
   freeze_encoder: False
   # training loop control
   # in epochs
-  rollout_every: 1
+  rollout_every: 5
   num_rollouts: 2
   checkpoint_every: 20
   val_every: 5
@@ -98,7 +99,7 @@ hydra:
   job:
     override_dirname: ${name}
   run:
-    dir: data/outputs/autoencoder/${now:%H.%M.%S} #data/output/autoencoder/${autoencoder.lats_channels}_${autoencoder.NUM_CHANNEL_1}_${autoencoder.NUM_CHANNEL_2}/
+    dir: data/outputs/autoencoder/${name} #data/output/autoencoder/${autoencoder.lats_channels}_${autoencoder.NUM_CHANNEL_1}_${autoencoder.NUM_CHANNEL_2}/
   sweep:
-    dir: data/outputs/autoencoder/${now:%H.%M.%S} #data/output/autoencoder/${autoencoder.lats_channels}_${autoencoder.NUM_CHANNEL_1}_${autoencoder.NUM_CHANNEL_2}/
+    dir: data/outputs/autoencoder/${name} #data/output/autoencoder/${autoencoder.lats_channels}_${autoencoder.NUM_CHANNEL_1}_${autoencoder.NUM_CHANNEL_2}/
     subdir: ${hydra.job.num}

@@ -434,3 +434,50 @@ class ResDec24to96(torch.nn.Module):
         
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.up_blocks(x)
+
+class ResEncoder(torch.nn.Module):
+    def __init__(self, in_channels=3, out_channels=3, channels_list=[8, 16, 32, 16, 8]):
+        super().__init__()
+
+        layers = []
+
+        # Initial conv layer
+        layers.append(torch.nn.Conv2d(in_channels, channels_list[0], kernel_size=3, stride=1, padding=1))
+        layers.append(torch.nn.ReLU(inplace=True))
+
+        # Residual blocks with pooling
+        for i in range(len(channels_list)-1):
+            layers.append(ResBlock(channels_list[i], channels_list[i + 1]))
+            layers.append(torch.nn.MaxPool2d(kernel_size=2))
+
+        # Final conv to project to out_channels
+        layers.append(torch.nn.Conv2d(channels_list[-1], out_channels, kernel_size=3, stride=1, padding=1))
+        layers.append(torch.nn.ReLU(inplace=True))  # Optional
+
+        self.encoder = torch.nn.Sequential(*layers)
+
+    def forward(self, x):
+        return self.encoder(x)
+
+class ResDecoder(torch.nn.Module):
+    def __init__(self, in_channels=3, out_channels=3, channels_list=[8, 16, 32, 16, 8]):
+        super().__init__()
+        
+        layers = []
+
+        # Initial conv to expand channels
+        layers.append(torch.nn.Conv2d(in_channels, channels_list[0], kernel_size=3, padding=1))
+        layers.append(torch.nn.ReLU(inplace=True))
+
+        # ResUpBlocks with upsampling
+        for i in range(len(channels_list) - 1):
+            layers.append(ResUpBlock(channels_list[i], channels_list[i + 1]))
+
+        # Final projection
+        layers.append(torch.nn.Conv2d(channels_list[-1], out_channels, kernel_size=1))
+        layers.append(torch.nn.Tanh())  # or Sigmoid / ReLU depending on your use case
+
+        self.decoder = torch.nn.Sequential(*layers)
+
+    def forward(self, x):
+        return self.decoder(x)

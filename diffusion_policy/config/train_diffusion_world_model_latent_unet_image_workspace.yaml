@@ -10,7 +10,7 @@ shape_meta: ${task.shape_meta}
 exp_name: "default"
 
 n_obs_steps: 4
-n_future_steps: 1
+n_future_steps: 3
 horizon: ${eval:'${n_obs_steps}+${n_future_steps}'}
 dataset_obs_steps: ${n_obs_steps}
 obs_as_global_cond: True
@@ -37,7 +37,7 @@ world_model:
     NUM_CHANNEL_1: 32
     NUM_CHANNEL_2: 64
     l2_loss_weight: 0.05
-  pretrained_auto_encoder_path: /home/lma326/course/diffusion_world_model/data/outputs/autoencoder_1_32_64_tanh_l2_regularized/checkpoints/latest.ckpt
+  pretrained_auto_encoder_path: /nethome/lma326/diffusion_world_model/data/autoencoder_1_32_64_tanh_l2_regularized/checkpoints/latest.ckpt
 
   n_obs_steps: ${n_obs_steps}
   n_future_steps: ${n_future_steps}
@@ -51,7 +51,6 @@ world_model:
 
   # scheduler.step params
   # predict_epsilon: True
-
 
 ema:
   _target_: diffusion_policy.model.diffusion.ema_model.EMAModel
@@ -98,9 +97,9 @@ training:
   freeze_encoder: False
   # training loop control
   # in epochs
-  rollout_every: 10
+  rollout_every: 20
   num_rollouts: 2
-  checkpoint_every: 10
+  checkpoint_every: 20
   val_every: 5
   sample_every: 5
   # steps per epoch
@@ -113,7 +112,7 @@ logging:
   project: diffusion_world_model
   resume: True
   mode: online
-  name: ${now:%Y.%m.%d-%H.%M.%S}_${name}_${task_name}
+  name: ${name}_${now:%Y.%m.%d-%H.%M.%S}
   tags: ["${name}", "${task_name}", "${exp_name}"]
   id: null
   group: latent_unet_image
