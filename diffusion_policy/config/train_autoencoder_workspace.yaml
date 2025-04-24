@@ -98,7 +98,7 @@ hydra:
   job:
     override_dirname: ${name}
   run:
-    dir: data/outputs/autoencoder_1_32_64_tanh_l2_regularized #data/output/autoencoder/${autoencoder.lats_channels}_${autoencoder.NUM_CHANNEL_1}_${autoencoder.NUM_CHANNEL_2}/
+    dir: data/outputs/autoencoder/${now:%H.%M.%S} #data/output/autoencoder/${autoencoder.lats_channels}_${autoencoder.NUM_CHANNEL_1}_${autoencoder.NUM_CHANNEL_2}/
   sweep:
-    dir: data/outputs/autoencoder_1_32_64_tanh_l2_regularized #data/output/autoencoder/${autoencoder.lats_channels}_${autoencoder.NUM_CHANNEL_1}_${autoencoder.NUM_CHANNEL_2}/
+    dir: data/outputs/autoencoder/${now:%H.%M.%S} #data/output/autoencoder/${autoencoder.lats_channels}_${autoencoder.NUM_CHANNEL_1}_${autoencoder.NUM_CHANNEL_2}/
     subdir: ${hydra.job.num}

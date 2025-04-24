@@ -37,7 +37,7 @@ world_model:
     NUM_CHANNEL_1: 32
     NUM_CHANNEL_2: 64
     l2_loss_weight: 0.05
-  pretrained_auto_encoder_path: /home/lma326/course/diffusion_world_model/data/outputs/autoencoder_1_32_64_tanh_l2_regularized/checkpoints/latest.ckpt
+  pretrained_auto_encoder_path: /nethome/lma326/diffusion_world_model/data/autoencoder_1_32_64_tanh_l2_regularized/checkpoints/latest.ckpt
 
   n_obs_steps: ${n_obs_steps}
   n_future_steps: ${n_future_steps}
@@ -112,7 +112,7 @@ logging:
   project: diffusion_world_model
   resume: True
   mode: online
-  name: ${now:%Y.%m.%d-%H.%M.%S}_${name}_${task_name}
+  name: ${name}_${now:%Y.%m.%d-%H.%M.%S}
   tags: ["${name}", "${task_name}", "${exp_name}"]
   id: null
   group: latent_unet_image
