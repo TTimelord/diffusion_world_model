@@ -73,20 +73,29 @@ class VAE(ModuleAttrMixin):
                  decoder_channels=[8,16,32,16,8],
                  recursive_steps=1,
                  recursive_weight=0.5,
-                 beta=1.0,):
+                 beta=1.0,
+                 fixed_logvar = None):
         super().__init__()
         # Encoder now outputs 2 * lats_channels so we can split into mu & logvar
-        self.encoder = ResEncoder(obs_channels, 2 * lats_channels, encoder_channels)
+        if fixed_logvar is None:
+            self.encoder = ResEncoder(obs_channels, 2 * lats_channels, encoder_channels)
+        else:
+            self.encoder = ResEncoder(obs_channels, lats_channels, encoder_channels)
         self.decoder = ResDecoder(lats_channels, obs_channels, decoder_channels)
         self.normalizer = LinearNormalizer()
         self.lats_channels = lats_channels
         self.recursive_steps = recursive_steps
         self.recursive_weight = recursive_weight
         self.beta = beta
+        self.fixed_logvar = fixed_logvar
 
     def encode(self, obs):
-        stats = self.encoder(obs)
-        mu, logvar = torch.chunk(stats, 2, dim=1)
+        if self.fixed_logvar is None:
+            stats = self.encoder(obs)
+            mu, logvar = torch.chunk(stats, 2, dim=1)
+        else:
+            mu = self.encoder(obs)
+            logvar = torch.full_like(mu, self.fixed_logvar)
         return mu, logvar
 
     def reparameterize(self, mu, logvar):

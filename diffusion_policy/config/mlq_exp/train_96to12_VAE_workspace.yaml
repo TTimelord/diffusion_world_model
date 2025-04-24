@@ -2,7 +2,7 @@ defaults:
   - _self_
   - task: pusht_image_world_model
 
-name: train_VAE_96to12_beta_0.01
+name: train_VAE_96to12_beta_0.01_fixed_logvar_0.0
 _target_: diffusion_policy.workspace.train_autoencoder_workspace.TrainAutoencoderWorkspace
 
 task_name: ${task.name}
@@ -22,6 +22,7 @@ autoencoder:
   encoder_channels: [64, 64, 64, 64]
   decoder_channels: [64, 64, 64, 64]
   beta: 0.01
+  fixed_logvar: 0.0
 
 dataloader:
   batch_size: 32
