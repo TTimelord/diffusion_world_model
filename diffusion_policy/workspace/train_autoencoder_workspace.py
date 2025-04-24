@@ -130,6 +130,10 @@ class TrainAutoencoderWorkspace(BaseWorkspace):
             }
         )
 
+        # create media directory
+        media_dir = os.path.join(self.output_dir, 'media')
+        os.makedirs(media_dir, exist_ok=True)
+
         # configure checkpoint
         topk_manager = TopKCheckpointManager(
             save_dir=os.path.join(self.output_dir, 'checkpoints'),
