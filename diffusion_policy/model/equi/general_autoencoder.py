@@ -14,6 +14,9 @@ class Autoencoder(ModuleAttrMixin):
                  l2_loss_weight=0.00001,
                  recursive_steps=1,
                  recursive_weight=0.5,
+                 latent_noise_std=None,
+                 latent_norm_regularization_r=None,
+                 latent_norm_regularization_weight=None,
                  ):
         super().__init__()
         self.encoder = ResEncoder(obs_channels, lats_channels, encoder_channels)
@@ -25,6 +28,9 @@ class Autoencoder(ModuleAttrMixin):
         self.l2_loss_weight = l2_loss_weight
         self.recursive_steps = recursive_steps
         self.recursive_weight = recursive_weight
+        self.latent_noise_std = latent_noise_std
+        self.latent_norm_regularization_r = latent_norm_regularization_r
+        self.latent_norm_regularization_weight = latent_norm_regularization_weight
     
     def encode(self, obs):
         return self.encoder(obs)
@@ -36,10 +42,20 @@ class Autoencoder(ModuleAttrMixin):
         nobs = self.normalizer.normalize(batch['obs'])
         obs = nobs['image'].squeeze(1)
         latent = self.encode(obs)
+        flattened_latent = latent.view(latent.size(0), -1)
+        dimension = flattened_latent.size(1)
+
+        if self.latent_noise_std is not None:
+            noise = torch.randn_like(latent) * self.latent_noise_std * self.latent_norm_regularization_r
+            latent = latent + noise
         reconstructions = self.decode(latent)
         
         loss = torch.nn.functional.mse_loss(obs, reconstructions, reduction='mean') \
             + self.l2_loss_weight * torch.nn.functional.mse_loss(latent, torch.zeros_like(latent), reduction='mean')
+        
+        if self.latent_norm_regularization_r is not None and self.latent_norm_regularization_weight is not None:
+            latent_norm_loss = torch.mean((torch.sum(flattened_latent ** 2, dim=1) - self.latent_norm_regularization_r * dimension)**2)
+            loss += self.latent_norm_regularization_weight * latent_norm_loss
         
         return loss
     
