@@ -121,8 +121,10 @@ class DiffusionWorldModelImageLatentUnet(BaseWorldModel):
             num_inference_steps = noise_scheduler.config.num_train_timesteps
         self.num_inference_steps = num_inference_steps
 
+        ddim_scheduler_config = dict(noise_scheduler.config)
+        ddim_scheduler_config.pop('variance_type', None)
         self.ddim_scheduler = DDIMScheduler(
-            **noise_scheduler.config,
+            **ddim_scheduler_config,
         )
 
         # normalizer for images if needed
@@ -171,7 +173,7 @@ class DiffusionWorldModelImageLatentUnet(BaseWorldModel):
 
             # Start from random noise
             # If you want the model to be deterministic, consider using zero noise
-            noisy_latent = torch.randn((B, self.n_future_steps * C_latent, H_latent, W_latent), device=device, dtype=dtype)
+            noisy_latent = torch.zeros((B, self.n_future_steps * C_latent, H_latent, W_latent), device=device, dtype=dtype)
 
             # set up timesteps
             self.ddim_scheduler.set_timesteps(self.num_inference_steps, device=device)
@@ -180,7 +182,7 @@ class DiffusionWorldModelImageLatentUnet(BaseWorldModel):
             latent_history = rearrange(latent_history, '(B T) C H W -> B (T C) H W', B=B, T=self.n_obs_steps)
             action_seq = action_seq.view(B, -1)
 
-            for t in self.noise_scheduler.timesteps:
+            for t in self.ddim_scheduler.timesteps:
                 # forward the model
                 if torch.is_tensor(t) and len(t.shape) == 0:
                     timesteps = t[None].to(device)
@@ -191,7 +193,7 @@ class DiffusionWorldModelImageLatentUnet(BaseWorldModel):
                 x, _, _ = self.unet(x, cond)
                 x = self.conv_out(F.silu(self.norm_out(x)))
                 # diffusion update
-                noisy_latent = self.noise_scheduler.step(
+                noisy_latent = self.ddim_scheduler.step(
                     x, t, noisy_latent
                 ).prev_sample
 
