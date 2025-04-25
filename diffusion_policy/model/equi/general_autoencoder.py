@@ -5,6 +5,8 @@ from diffusion_policy.model.common.normalizer import LinearNormalizer
 from diffusion_policy.model.common.module_attr_mixin import ModuleAttrMixin
 from diffusion_policy.model.equi.equi_autoencoder import ResEncoder, ResDecoder
 
+from diffusion_policy.model.equi.ssim import ms_ssim
+
 class Autoencoder(ModuleAttrMixin):
     def __init__(self,
                  obs_channels=3,
@@ -17,6 +19,7 @@ class Autoencoder(ModuleAttrMixin):
                  latent_noise_std=None,
                  latent_norm_regularization_r=None,
                  latent_norm_regularization_weight=None,
+                 ssim_weight=None,
                  ):
         super().__init__()
         self.encoder = ResEncoder(obs_channels, lats_channels, encoder_channels)
@@ -31,6 +34,7 @@ class Autoencoder(ModuleAttrMixin):
         self.latent_noise_std = latent_noise_std
         self.latent_norm_regularization_r = latent_norm_regularization_r
         self.latent_norm_regularization_weight = latent_norm_regularization_weight
+        self.ssim_weight = ssim_weight
     
     def encode(self, obs):
         return self.encoder(obs)
@@ -53,6 +57,10 @@ class Autoencoder(ModuleAttrMixin):
         loss = torch.nn.functional.mse_loss(obs, reconstructions, reduction='mean') \
             + self.l2_loss_weight * torch.nn.functional.mse_loss(latent, torch.zeros_like(latent), reduction='mean')
         
+        if self.ssim_weight is not None:
+            ssim_loss = 1 - ms_ssim((obs + 1)/2, (reconstructions + 1)/2, data_range=1.0, size_average=True, win_size=11, weights=[0.6, 0.2, 0.2])
+            loss += self.ssim_weight*ssim_loss
+
         if self.latent_norm_regularization_r is not None and self.latent_norm_regularization_weight is not None:
             latent_norm_loss = torch.mean((torch.sum(flattened_latent ** 2, dim=1) - self.latent_norm_regularization_r * dimension)**2)
             loss += self.latent_norm_regularization_weight * latent_norm_loss
@@ -90,7 +98,9 @@ class VAE(ModuleAttrMixin):
                  recursive_steps=1,
                  recursive_weight=0.5,
                  beta=1.0,
-                 fixed_logvar = None):
+                 fixed_logvar = None,
+                 ssim_weight=None,
+                ):
         super().__init__()
         # Encoder now outputs 2 * lats_channels so we can split into mu & logvar
         if fixed_logvar is None:
@@ -104,6 +114,7 @@ class VAE(ModuleAttrMixin):
         self.recursive_weight = recursive_weight
         self.beta = beta
         self.fixed_logvar = fixed_logvar
+        self.ssim_weight = ssim_weight
 
     def encode(self, obs):
         if self.fixed_logvar is None:
@@ -136,6 +147,10 @@ class VAE(ModuleAttrMixin):
         recon = self.decode(z)
 
         recon_loss = torch.nn.functional.mse_loss(obs, recon, reduction='mean')
+        if self.ssim_weight is not None:
+            ssim_loss = 1 - ms_ssim((obs + 1)/2, (recon + 1)/2, data_range=1.0, size_average=True, win_size=9, weights=[0.6, 0.2, 0.2])
+            recon_loss += self.ssim_weight*ssim_loss
+
         kl_loss    = self.compute_kl(mu, logvar)
 
         return recon_loss + self.beta * kl_loss

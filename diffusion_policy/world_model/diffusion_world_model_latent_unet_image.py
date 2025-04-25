@@ -4,6 +4,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange, reduce
 from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
+from diffusers.schedulers.scheduling_ddim import DDIMScheduler
 
 from diffusion_policy.model.common.normalizer import LinearNormalizer
 from diffusion_policy.model.common.module_attr_mixin import ModuleAttrMixin
@@ -37,6 +38,7 @@ class DiffusionWorldModelImageLatentUnet(BaseWorldModel):
                  depths = [2,2,2,2],
                  channels= [64,64,64,64],
                  attn_depths= [0,0,0,0],
+                 l1_loss_weight=0.0,
                  **kwargs):
         """
         shape_meta:
@@ -82,7 +84,7 @@ class DiffusionWorldModelImageLatentUnet(BaseWorldModel):
             nn.Linear(cond_channels * 4, cond_channels),
         )
         self.act_proj = nn.Sequential(
-            nn.Linear(action_dim * (n_future_steps), cond_channels),
+            nn.Linear(action_dim, cond_channels),
             nn.SiLU(),
             nn.Linear(cond_channels, cond_channels),
         )
@@ -91,7 +93,7 @@ class DiffusionWorldModelImageLatentUnet(BaseWorldModel):
             nn.SiLU(),
             nn.Linear(cond_channels, cond_channels),
         )
-        self.conv_in = Conv3x3((n_obs_steps + n_future_steps) * lats_channels, channels[0])
+        self.conv_in = Conv3x3((n_obs_steps + 1) * lats_channels, channels[0])
 
         self.unet = ConditionalUNet2D(
             cond_channels = cond_channels,
@@ -101,7 +103,7 @@ class DiffusionWorldModelImageLatentUnet(BaseWorldModel):
         )
 
         self.norm_out = GroupNorm(channels[0])
-        self.conv_out = Conv3x3(channels[0], n_future_steps * lats_channels)
+        self.conv_out = Conv3x3(channels[0], lats_channels)
         nn.init.zeros_(self.conv_out.weight)
 
         trainable_params = sum(p.numel() for p in self.unet.parameters() if p.requires_grad)
@@ -117,9 +119,16 @@ class DiffusionWorldModelImageLatentUnet(BaseWorldModel):
             num_inference_steps = noise_scheduler.config.num_train_timesteps
         self.num_inference_steps = num_inference_steps
 
+        ddim_scheduler_config = dict(noise_scheduler.config)
+        ddim_scheduler_config.pop('variance_type', None)
+        self.ddim_scheduler = DDIMScheduler(
+            **ddim_scheduler_config,
+        )
+
         # normalizer for images if needed
         self.normalizer = LinearNormalizer()
         self.n_obs_steps = n_obs_steps
+        self.l1_loss_weight = l1_loss_weight
 
     def predict_future(self, obs_dict: Dict[str, torch.Tensor], action, last_latent = None) -> Dict[str, torch.Tensor]:
         """
@@ -163,16 +172,16 @@ class DiffusionWorldModelImageLatentUnet(BaseWorldModel):
 
             # Start from random noise
             # If you want the model to be deterministic, consider using zero noise
-            noisy_latent = torch.randn((B, self.n_future_steps * C_latent, H_latent, W_latent), device=device, dtype=dtype)
+            noisy_latent = torch.zeros((B, C_latent, H_latent, W_latent), device=device, dtype=dtype)
 
             # set up timesteps
-            self.noise_scheduler.set_timesteps(self.num_inference_steps, device=device)
+            self.ddim_scheduler.set_timesteps(self.num_inference_steps, device=device)
 
             # reshape
             latent_history = rearrange(latent_history, '(B T) C H W -> B (T C) H W', B=B, T=self.n_obs_steps)
-            action_seq = action_seq.view(B, -1)
+            action_seq = action_seq[:, :1].view(B, -1)
 
-            for t in self.noise_scheduler.timesteps:
+            for t in self.ddim_scheduler.timesteps:
                 # forward the model
                 if torch.is_tensor(t) and len(t.shape) == 0:
                     timesteps = t[None].to(device)
@@ -183,18 +192,18 @@ class DiffusionWorldModelImageLatentUnet(BaseWorldModel):
                 x, _, _ = self.unet(x, cond)
                 x = self.conv_out(F.silu(self.norm_out(x)))
                 # diffusion update
-                noisy_latent = self.noise_scheduler.step(
+                noisy_latent = self.ddim_scheduler.step(
                     x, t, noisy_latent
                 ).prev_sample
 
-            noisy_latent = rearrange(noisy_latent, 'B (T C) H W -> (B T) C H W', T=self.n_future_steps)
+            noisy_latent = rearrange(noisy_latent, 'B (T C) H W -> (B T) C H W', T=1)
             # decode
             predicted = self.auto_encoder.decode(noisy_latent)
-            predicted = rearrange(predicted, '(B T) C H W -> B T C H W', B=B, T=self.n_future_steps)
+            predicted = rearrange(predicted, '(B T) C H W -> B T C H W', B=B, T=1)
             unnormalized_predicted = self.normalizer['image'].unnormalize(predicted)
 
             latent_history = rearrange(latent_history, 'B (T C) H W -> B T C H W', T=self.n_obs_steps)
-            noisy_latent = rearrange(noisy_latent, '(B T) C H W -> B T C H W', B=B, T=self.n_future_steps)
+            noisy_latent = rearrange(noisy_latent, '(B T) C H W -> B T C H W', B=B, T=1)
 
         return {
             "predicted_future": unnormalized_predicted,
@@ -222,11 +231,11 @@ class DiffusionWorldModelImageLatentUnet(BaseWorldModel):
 
         imgs = nobs['image']
         history_imgs = imgs[:, :self.n_obs_steps]
-        future_imgs = imgs[:, self.n_obs_steps:self.n_obs_steps+self.n_future_steps]
-        action_seq = nactions[:, self.n_obs_steps-1:self.n_obs_steps+self.n_future_steps-1]
+        future_imgs = imgs[:, self.n_obs_steps:self.n_obs_steps+1]
+        action_seq = nactions[:, self.n_obs_steps-1:self.n_obs_steps]
 
         B, Tf, C, H, W = future_imgs.shape
-        assert Tf == self.n_future_steps, f"Expected n_future_steps={self.n_future_steps}, got {Tf}."
+        # assert Tf == self.n_future_steps, f"Expected n_future_steps={self.n_future_steps}, got {Tf}."
 
         # encode
         future_imgs = rearrange(future_imgs, 'B T C H W -> (B T) C H W')
@@ -235,7 +244,7 @@ class DiffusionWorldModelImageLatentUnet(BaseWorldModel):
         latent_history = self.auto_encoder.encode(history_imgs)
 
         # reshape
-        latent_x_0 = rearrange(latent_x_0, '(B T) C H W -> B (T C) H W', B=B, T=self.n_future_steps)
+        latent_x_0 = rearrange(latent_x_0, '(B T) C H W -> B (T C) H W', B=B, T=1)
         latent_history = rearrange(latent_history, '(B T) C H W -> B (T C) H W', B=B, T=self.n_obs_steps)
 
         # sample random timesteps for each sample
@@ -269,3 +278,73 @@ class DiffusionWorldModelImageLatentUnet(BaseWorldModel):
 
         loss = F.mse_loss(x, target, reduction='mean')
         return loss
+
+    def compute_autoregressive_loss(self, batch: Dict[str, torch.Tensor], depth=1) -> torch.Tensor:
+        """
+        Standard diffusion objective:
+          1) flatten GT future frames
+          2) sample random timesteps
+          3) add noise
+          4) model predicts noise (or sample)
+          5) MSE loss
+        """
+        nobs = self.normalizer.normalize(batch['obs'])
+        nactions = self.normalizer['action'].normalize(batch['action'])
+
+        imgs = nobs['image']
+        history_imgs = imgs[:, :self.n_obs_steps]
+        future_imgs = imgs[:, self.n_obs_steps:self.n_obs_steps+self.n_future_steps]
+        action_seq = nactions[:, self.n_obs_steps-1:self.n_obs_steps+self.n_future_steps-1]
+
+        B, T, C, H, W = future_imgs.shape
+        assert T == self.n_future_steps, f"Expected n_future_steps={self.n_future_steps}, got {T}."
+
+        # encode
+        future_imgs = rearrange(future_imgs, 'B T C H W -> (B T) C H W')
+        history_imgs = rearrange(history_imgs, 'B T C H W -> (B T) C H W')
+        latent_future = self.auto_encoder.encode(future_imgs)
+        latent_history = self.auto_encoder.encode(history_imgs)
+
+        latent_channels: int = latent_future.shape[1]
+
+        # reshape
+        latent_future = rearrange(latent_future, '(B T) C H W -> B T C H W', B=B, T=self.n_future_steps)
+        latent_history = rearrange(latent_history, '(B T) C H W -> B (T C) H W', B=B, T=self.n_obs_steps)
+
+
+        total_loss = 0.0
+
+        # for each future time-step
+        for t in range(depth):
+            x_true = latent_future[:, t]
+
+            noise_t = torch.randint(
+                0, self.noise_scheduler.config.num_train_timesteps,
+                (B,), device=x_true.device
+            ).long()
+            noise = torch.randn_like(x_true)
+            noisy = self.noise_scheduler.add_noise(x_true, noise, noise_t)
+
+            a = action_seq[:, t].view(B, -1)
+            cond = self.cond_proj(self.diffusion_step_encoder(noise_t) + self.act_proj(a))
+
+            inp = torch.cat([latent_history, noisy], dim=1)
+            x = self.conv_in(inp)
+            x, _, _ = self.unet(x, cond)
+            x = self.conv_out(F.silu(self.norm_out(x)))
+
+            # 5) form prediction of clean x
+            self.ddim_scheduler.set_timesteps(1, device=x_true.device)
+            x_pred = self.ddim_scheduler.step(
+                x, t, noisy
+            ).pred_original_sample
+
+            target = noise if self.noise_scheduler.config.prediction_type == 'epsilon' else x_true
+            total_loss = total_loss + F.mse_loss(x, target, reduction='mean') + self.l1_loss_weight*F.l1_loss(x, target, reduction='mean')
+
+            latent_history = torch.cat([
+                latent_history[:, latent_channels:],                # drop first C channels
+                x_pred
+            ], dim=1)
+
+        return total_loss / self.n_future_steps
