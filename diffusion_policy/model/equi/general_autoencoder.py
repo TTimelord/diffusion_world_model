@@ -19,6 +19,7 @@ class Autoencoder(ModuleAttrMixin):
                  latent_noise_std=None,
                  latent_norm_regularization_r=None,
                  latent_norm_regularization_weight=None,
+                 ssim_weight=None,
                  ):
         super().__init__()
         self.encoder = ResEncoder(obs_channels, lats_channels, encoder_channels)
@@ -33,6 +34,7 @@ class Autoencoder(ModuleAttrMixin):
         self.latent_noise_std = latent_noise_std
         self.latent_norm_regularization_r = latent_norm_regularization_r
         self.latent_norm_regularization_weight = latent_norm_regularization_weight
+        self.ssim_weight = ssim_weight
     
     def encode(self, obs):
         return self.encoder(obs)
@@ -55,6 +57,10 @@ class Autoencoder(ModuleAttrMixin):
         loss = torch.nn.functional.mse_loss(obs, reconstructions, reduction='mean') \
             + self.l2_loss_weight * torch.nn.functional.mse_loss(latent, torch.zeros_like(latent), reduction='mean')
         
+        if self.ssim_weight is not None:
+            ssim_loss = 1 - ms_ssim((obs + 1)/2, (reconstructions + 1)/2, data_range=1.0, size_average=True, win_size=11, weights=[0.6, 0.2, 0.2])
+            loss += self.ssim_weight*ssim_loss
+
         if self.latent_norm_regularization_r is not None and self.latent_norm_regularization_weight is not None:
             latent_norm_loss = torch.mean((torch.sum(flattened_latent ** 2, dim=1) - self.latent_norm_regularization_r * dimension)**2)
             loss += self.latent_norm_regularization_weight * latent_norm_loss
