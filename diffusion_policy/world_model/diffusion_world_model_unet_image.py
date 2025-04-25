@@ -36,6 +36,7 @@ class DiffusionWorldModelImageUnet(BaseWorldModel):
                  depths = [2,2,2,2],
                  channels= [64,64,64,64],
                  attn_depths= [0,0,0,0],
+                 l1_loss_weight=0.0,
                  **kwargs):
         """
         shape_meta:
@@ -66,7 +67,7 @@ class DiffusionWorldModelImageUnet(BaseWorldModel):
             nn.Linear(cond_channels * 4, cond_channels),
         )
         self.act_proj = nn.Sequential(
-            nn.Linear(action_dim * (n_future_steps), cond_channels),
+            nn.Linear(action_dim, cond_channels),
             nn.SiLU(),
             nn.Linear(cond_channels, cond_channels),
         )
@@ -75,7 +76,7 @@ class DiffusionWorldModelImageUnet(BaseWorldModel):
             nn.SiLU(),
             nn.Linear(cond_channels, cond_channels),
         )
-        self.conv_in = Conv3x3((n_obs_steps + n_future_steps) * img_channels, channels[0])
+        self.conv_in = Conv3x3((n_obs_steps + 1) * img_channels, channels[0])
 
         self.unet = ConditionalUNet2D(
             cond_channels = cond_channels,
@@ -85,7 +86,7 @@ class DiffusionWorldModelImageUnet(BaseWorldModel):
         )
 
         self.norm_out = GroupNorm(channels[0])
-        self.conv_out = Conv3x3(channels[0], n_future_steps * img_channels)
+        self.conv_out = Conv3x3(channels[0], img_channels)
         nn.init.zeros_(self.conv_out.weight)
 
         trainable_params = sum(p.numel() for p in self.unet.parameters() if p.requires_grad)
@@ -110,6 +111,7 @@ class DiffusionWorldModelImageUnet(BaseWorldModel):
         # normalizer for images if needed
         self.normalizer = LinearNormalizer()
         self.n_obs_steps = n_obs_steps
+        self.l1_loss_weight = l1_loss_weight
 
     def predict_future(self, obs_dict: Dict[str, torch.Tensor], action) -> Dict[str, torch.Tensor]:
         """
@@ -131,14 +133,14 @@ class DiffusionWorldModelImageUnet(BaseWorldModel):
 
             # Start from random noise
             # If you want the model to be deterministic, consider using zero noise
-            noisy_image = torch.zeros((B, self.n_future_steps * C, H, W), device=device, dtype=dtype)
+            noisy_image = torch.zeros((B, C, H, W), device=device, dtype=dtype)
 
             # set up timesteps
             self.ddim_scheduler.set_timesteps(self.num_inference_steps, device=device)
 
             # reshape
             history_imgs = history_imgs.view(B, self.n_obs_steps * C, H, W)
-            action_seq = action_seq.view(B, -1)
+            action_seq = action_seq[:, :1].view(B, -1)
 
             for t in self.ddim_scheduler.timesteps:
                 # forward the model
@@ -155,7 +157,7 @@ class DiffusionWorldModelImageUnet(BaseWorldModel):
                     x, t, noisy_image
                 ).prev_sample
 
-            predicted = noisy_image.view(B, self.n_future_steps, C, H, W)
+            predicted = noisy_image.view(B, 1, C, H, W)
             unnormalized_predicted = self.normalizer['image'].unnormalize(predicted)
 
         return {
@@ -183,14 +185,16 @@ class DiffusionWorldModelImageUnet(BaseWorldModel):
 
         imgs = nobs['image']
         history_imgs = imgs[:, :self.n_obs_steps]
-        future_imgs = imgs[:, self.n_obs_steps:self.n_obs_steps+self.n_future_steps]
-        action_seq = nactions[:, self.n_obs_steps-1:self.n_obs_steps+self.n_future_steps-1]
+
+        # in the early stage only use 1 step prediction
+        future_imgs = imgs[:, self.n_obs_steps:self.n_obs_steps+1]
+        action_seq = nactions[:, self.n_obs_steps-1:self.n_obs_steps]
 
         B, T, C, H, W = future_imgs.shape
-        assert T == self.n_future_steps, f"Expected n_future_steps={self.n_future_steps}, got {T}."
+        # assert T == self.n_future_steps, f"Expected n_future_steps={self.n_future_steps}, got {T}."
 
         # flatten images
-        x_0 = future_imgs.view(B, self.n_future_steps * C, H, W)
+        x_0 = future_imgs.view(B, C, H, W)
         history_imgs = history_imgs.view(B, self.n_obs_steps * C, H, W)
 
         # sample random timesteps for each sample
@@ -223,3 +227,66 @@ class DiffusionWorldModelImageUnet(BaseWorldModel):
 
         loss = F.mse_loss(x, target, reduction='mean')
         return loss
+
+    def compute_autoregressive_loss(self, batch: Dict[str, torch.Tensor]) -> torch.Tensor:
+        """
+        Standard diffusion objective:
+          1) flatten GT future frames
+          2) sample random timesteps
+          3) add noise
+          4) model predicts noise (or sample)
+          5) MSE loss
+        """
+        nobs = self.normalizer.normalize(batch['obs'])
+        nactions = self.normalizer['action'].normalize(batch['action'])
+
+        imgs = nobs['image']
+        history_imgs = imgs[:, :self.n_obs_steps]
+        future_imgs = imgs[:, self.n_obs_steps:self.n_obs_steps+self.n_future_steps]
+        action_seq = nactions[:, self.n_obs_steps-1:self.n_obs_steps+self.n_future_steps-1]
+
+        B, T, C, H, W = future_imgs.shape
+        assert T == self.n_future_steps, f"Expected n_future_steps={self.n_future_steps}, got {T}."
+
+        # flatten images
+        history_imgs = history_imgs.view(B, self.n_obs_steps * C, H, W)
+
+        total_loss = 0.0
+
+        # for each future time-step
+        for t in range(self.n_future_steps):
+            x_true = future_imgs[:, t].view(B, C, H, W)
+
+            noise_t = torch.randint(
+                0, self.noise_scheduler.config.num_train_timesteps,
+                (B,), device=x_true.device
+            ).long()
+            noise = torch.randn_like(x_true).view(B, C, H, W)
+            noisy = self.noise_scheduler.add_noise(x_true, noise, noise_t)
+
+            a = action_seq[:, t].view(B, -1)
+            cond = self.cond_proj(self.diffusion_step_encoder(noise_t) + self.act_proj(a))
+
+            inp = torch.cat([history_imgs, noisy], dim=1)
+            x = self.conv_in(inp)
+            x, _, _ = self.unet(x, cond)
+            x = self.conv_out(F.silu(self.norm_out(x)))
+
+            # 5) form prediction of clean x
+            self.ddim_scheduler.set_timesteps(self.noise_scheduler.config.num_train_timesteps, device=x_true.device)
+            x_pred = self.ddim_scheduler.step(
+                x, t, noisy
+            ).pred_original_sample
+
+            target = noise if self.noise_scheduler.config.prediction_type == 'epsilon' else x_true
+            total_loss = total_loss + F.mse_loss(x, target, reduction='mean') + self.l1_loss_weight*F.l1_loss(x, target, reduction='mean')
+
+            # 8) update history: drop oldest and append next_frame
+            #    history has shape [B, n_obs*C, H, W]
+            x_pred_flat = x_pred.view(B, C, H, W)
+            history_imgs = torch.cat([
+                history_imgs[:, C:],                # drop first C channels
+                x_pred_flat
+            ], dim=1)
+
+        return total_loss / self.n_future_steps

@@ -156,8 +156,12 @@ class TrainDiffusionWorldModelUnetImageWorkspace(BaseWorkspace):
         # save batch for sampling
         train_sampling_batch = None
 
+        if not hasattr(cfg.training, 'autoregressive_training_begin_epoch') or cfg.training.autoregressive_training_begin_epoch is None:
+            cfg.training.autoregressive_training_begin_epoch = cfg.training.num_epochs
+
         if cfg.training.debug:
             cfg.training.num_epochs = 2
+            cfg.training.autoregressive_training_begin_epoch = 1
             cfg.training.max_train_steps = 3
             cfg.training.max_val_steps = 3
             cfg.training.num_rollouts = 1
@@ -165,6 +169,7 @@ class TrainDiffusionWorldModelUnetImageWorkspace(BaseWorkspace):
             cfg.training.checkpoint_every = 1
             cfg.training.val_every = 1
             cfg.training.sample_every = 1
+
 
         # training loop
         log_path = os.path.join(self.output_dir, 'logs.json.txt')
@@ -186,7 +191,10 @@ class TrainDiffusionWorldModelUnetImageWorkspace(BaseWorkspace):
                             train_sampling_batch = batch
 
                         # compute loss
-                        raw_loss = self.model.compute_loss(batch)
+                        if self.epoch < cfg.training.autoregressive_training_begin_epoch:
+                            raw_loss = self.model.compute_loss(batch)
+                        else:
+                            raw_loss = self.model.compute_autoregressive_loss(batch)
                         loss = raw_loss / cfg.training.gradient_accumulate_every
                         loss.backward()
 
@@ -346,7 +354,7 @@ class TrainDiffusionWorldModelUnetImageWorkspace(BaseWorkspace):
                         # sample trajectory from training set, and evaluate difference
                         batch = dict_apply(train_sampling_batch, lambda x: x.to(device, non_blocking=True))
                         obs_dict = batch['obs']
-                        target_future_images = obs_dict['image'][:,self.model.n_obs_steps:self.model.n_obs_steps+self.model.n_future_steps,...]
+                        target_future_images = obs_dict['image'][:,self.model.n_obs_steps:self.model.n_obs_steps+1,...]
                         history_obs_dict = dict_apply(obs_dict, lambda x: x[:,:self.model.n_obs_steps,...])
                         gt_action = batch['action']
                         future_action = gt_action[:,self.model.n_obs_steps-1:self.model.n_obs_steps+self.model.n_future_steps-1,...]
