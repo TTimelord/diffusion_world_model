@@ -1,9 +1,11 @@
 from typing import Dict
+import copy
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange, reduce
 from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
+from diffusers.schedulers.scheduling_ddim import DDIMScheduler
 
 from diffusion_policy.model.common.normalizer import LinearNormalizer
 from diffusion_policy.model.common.module_attr_mixin import ModuleAttrMixin
@@ -99,6 +101,12 @@ class DiffusionWorldModelImageUnet(BaseWorldModel):
             num_inference_steps = noise_scheduler.config.num_train_timesteps
         self.num_inference_steps = num_inference_steps
 
+        ddim_scheduler_config = dict(noise_scheduler.config)
+        ddim_scheduler_config.pop('variance_type', None)
+        self.ddim_scheduler = DDIMScheduler(
+            **ddim_scheduler_config,
+        )
+
         # normalizer for images if needed
         self.normalizer = LinearNormalizer()
         self.n_obs_steps = n_obs_steps
@@ -126,7 +134,7 @@ class DiffusionWorldModelImageUnet(BaseWorldModel):
             noisy_image = torch.zeros((B, self.n_future_steps * C, H, W), device=device, dtype=dtype)
 
             # set up timesteps
-            self.noise_scheduler.set_timesteps(self.num_inference_steps, device=device)
+            self.ddim_scheduler.set_timesteps(self.num_inference_steps, device=device)
 
             # reshape
             history_imgs = history_imgs.view(B, self.n_obs_steps * C, H, W)

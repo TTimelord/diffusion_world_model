@@ -4,6 +4,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange, reduce
 from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
+from diffusers.schedulers.scheduling_ddim import DDIMScheduler
 
 from diffusion_policy.model.common.normalizer import LinearNormalizer
 from diffusion_policy.model.common.module_attr_mixin import ModuleAttrMixin
@@ -120,6 +121,10 @@ class DiffusionWorldModelImageLatentUnet(BaseWorldModel):
             num_inference_steps = noise_scheduler.config.num_train_timesteps
         self.num_inference_steps = num_inference_steps
 
+        self.ddim_scheduler = DDIMScheduler(
+            **noise_scheduler.config,
+        )
+
         # normalizer for images if needed
         self.normalizer = LinearNormalizer()
         self.n_obs_steps = n_obs_steps
@@ -169,7 +174,7 @@ class DiffusionWorldModelImageLatentUnet(BaseWorldModel):
             noisy_latent = torch.randn((B, self.n_future_steps * C_latent, H_latent, W_latent), device=device, dtype=dtype)
 
             # set up timesteps
-            self.noise_scheduler.set_timesteps(self.num_inference_steps, device=device)
+            self.ddim_scheduler.set_timesteps(self.num_inference_steps, device=device)
 
             # reshape
             latent_history = rearrange(latent_history, '(B T) C H W -> B (T C) H W', B=B, T=self.n_obs_steps)
