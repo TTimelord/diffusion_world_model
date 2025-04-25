@@ -273,7 +273,7 @@ class DiffusionWorldModelImageUnet(BaseWorldModel):
             x = self.conv_out(F.silu(self.norm_out(x)))
 
             # 5) form prediction of clean x
-            self.ddim_scheduler.set_timesteps(self.noise_scheduler.config.num_train_timesteps, device=x_true.device)
+            self.ddim_scheduler.set_timesteps(1, device=x_true.device)
             x_pred = self.ddim_scheduler.step(
                 x, t, noisy
             ).pred_original_sample
