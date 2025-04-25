@@ -228,7 +228,7 @@ class DiffusionWorldModelImageUnet(BaseWorldModel):
         loss = F.mse_loss(x, target, reduction='mean')
         return loss
 
-    def compute_autoregressive_loss(self, batch: Dict[str, torch.Tensor]) -> torch.Tensor:
+    def compute_autoregressive_loss(self, batch: Dict[str, torch.Tensor], depth=1) -> torch.Tensor:
         """
         Standard diffusion objective:
           1) flatten GT future frames
@@ -254,7 +254,7 @@ class DiffusionWorldModelImageUnet(BaseWorldModel):
         total_loss = 0.0
 
         # for each future time-step
-        for t in range(self.n_future_steps):
+        for t in range(depth):
             x_true = future_imgs[:, t].view(B, C, H, W)
 
             noise_t = torch.randint(

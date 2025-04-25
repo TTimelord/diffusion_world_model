@@ -194,7 +194,7 @@ class TrainDiffusionWorldModelUnetImageWorkspace(BaseWorkspace):
                         if self.epoch < cfg.training.autoregressive_training_begin_epoch:
                             raw_loss = self.model.compute_loss(batch)
                         else:
-                            raw_loss = self.model.compute_autoregressive_loss(batch)
+                            raw_loss = self.model.compute_autoregressive_loss(batch, depth=self.model.n_future_steps)
                         loss = raw_loss / cfg.training.gradient_accumulate_every
                         loss.backward()
 
@@ -310,6 +310,7 @@ class TrainDiffusionWorldModelUnetImageWorkspace(BaseWorkspace):
                             for i in tqdm.trange(episode_length - world_model.n_obs_steps):
                                 action = dataset.replay_buffer['action'][start_idx + i + world_model.n_obs_steps - 1:start_idx + i + world_model.n_obs_steps + world_model.n_future_steps - 1]
                                 action = torch.tensor(action, dtype=torch.float32).to(device)
+                                action = action.unsqueeze(0)
                                 predicted_images = world_model.predict_future(predicted_image_history, action)["predicted_future"] # B, T, C, H, W
                                 # append the first predicted image to update predicted_image_history
                                 predicted_image_history['image'] = torch.cat([predicted_image_history['image'][:, 1:], predicted_images[:, :1]], dim=1)

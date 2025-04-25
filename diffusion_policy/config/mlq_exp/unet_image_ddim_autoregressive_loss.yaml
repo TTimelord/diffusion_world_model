@@ -10,7 +10,7 @@ shape_meta: ${task.shape_meta}
 exp_name: "default"
 
 n_obs_steps: 4
-n_future_steps: 2
+n_future_steps: 3
 horizon: ${eval:'${n_obs_steps}+${n_future_steps}'}
 dataset_obs_steps: ${n_obs_steps}
 obs_as_global_cond: True
@@ -82,7 +82,7 @@ training:
   lr_scheduler: cosine
   lr_warmup_steps: 500
   num_epochs: 500
-  autoregressive_training_begin_epoch: 300
+  autoregressive_training_begin_epoch: 150
   gradient_accumulate_every: 1
   # EMA destroys performance when used with BatchNorm
   # replace BatchNorm with GroupNorm.
