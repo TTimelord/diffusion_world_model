@@ -140,7 +140,7 @@ class DiffusionWorldModelImageUnet(BaseWorldModel):
             history_imgs = history_imgs.view(B, self.n_obs_steps * C, H, W)
             action_seq = action_seq.view(B, -1)
 
-            for t in self.noise_scheduler.timesteps:
+            for t in self.ddim_scheduler.timesteps:
                 # forward the model
                 if torch.is_tensor(t) and len(t.shape) == 0:
                     timesteps = t[None].to(device)
@@ -151,7 +151,7 @@ class DiffusionWorldModelImageUnet(BaseWorldModel):
                 x, _, _ = self.unet(x, cond)
                 x = self.conv_out(F.silu(self.norm_out(x)))
                 # diffusion update
-                noisy_image = self.noise_scheduler.step(
+                noisy_image = self.ddim_scheduler.step(
                     x, t, noisy_image
                 ).prev_sample
 
