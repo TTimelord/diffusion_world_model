@@ -39,6 +39,7 @@ class DiffusionWorldModelImageLatentUnet(BaseWorldModel):
                  channels= [64,64,64,64],
                  attn_depths= [0,0,0,0],
                  l1_loss_weight=0.0,
+                 cond_latent_noise_std=None,
                  **kwargs):
         """
         shape_meta:
@@ -132,6 +133,7 @@ class DiffusionWorldModelImageLatentUnet(BaseWorldModel):
         self.normalizer = LinearNormalizer()
         self.n_obs_steps = n_obs_steps
         self.l1_loss_weight = l1_loss_weight
+        self.cond_latent_noise_std = cond_latent_noise_std
 
     def predict_future(self, obs_dict: Dict[str, torch.Tensor], action, last_latent = None) -> Dict[str, torch.Tensor]:
         """
@@ -266,6 +268,10 @@ class DiffusionWorldModelImageLatentUnet(BaseWorldModel):
         action_seq = action_seq.reshape(B, -1)
         cond = self.cond_proj(self.diffusion_step_encoder(timesteps) + self.act_proj(action_seq))
 
+        # add noise to history
+        if self.cond_latent_noise_std is not None:
+            latent_history = latent_history + torch.randn_like(latent_history) * self.cond_latent_noise_std
+
         x = self.conv_in(torch.cat((latent_history, noisy_x), dim=1))
         x, _, _ = self.unet(x, cond)
         x = self.conv_out(F.silu(self.norm_out(x)))
@@ -330,6 +336,9 @@ class DiffusionWorldModelImageLatentUnet(BaseWorldModel):
 
             a = action_seq[:, t].view(B, -1)
             cond = self.cond_proj(self.diffusion_step_encoder(noise_t) + self.act_proj(a))
+
+            if self.cond_latent_noise_std is not None:
+                latent_history = latent_history + torch.randn_like(latent_history) * self.cond_latent_noise_std
 
             inp = torch.cat([latent_history, noisy], dim=1)
             x = self.conv_in(inp)
