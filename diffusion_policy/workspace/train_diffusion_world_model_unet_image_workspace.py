@@ -272,6 +272,7 @@ class TrainDiffusionWorldModelUnetImageWorkspace(BaseWorkspace):
                             episode_length = end_idx - start_idx
                             if episode_length < world_model.n_obs_steps + world_model.n_future_steps:
                                 continue
+                            episode_length = min(episode_length, 200) # truncate episode
 
                             # video_writer
                             gt_filename = pathlib.Path(self.output_dir).joinpath(
