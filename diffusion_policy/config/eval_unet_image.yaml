@@ -1,0 +1,59 @@
+defaults:
+  - _self_
+  - task: pusht_image_world_model
+
+name: eval_unet_image
+_target_: diffusion_policy.workspace.eval_unet_image_workspace.EvalDiffusionWorldModelUnetImageWorkspace
+
+task_name: ${task.name}
+shape_meta: ${task.shape_meta}
+exp_name: "default"
+
+n_obs_steps: 4
+n_future_steps: 1
+horizon: ${eval:'${n_obs_steps}+${n_future_steps}'}
+dataset_obs_steps: ${n_obs_steps}
+obs_as_global_cond: True
+
+world_model:
+  _target_: diffusion_policy.world_model.diffusion_world_model_unet_image.DiffusionWorldModelImageUnet
+
+  shape_meta: ${shape_meta}
+
+  noise_scheduler:
+    _target_: diffusers.schedulers.scheduling_ddpm.DDPMScheduler
+    num_train_timesteps: 5
+    beta_start: 0.0001
+    beta_end: 0.02
+    beta_schedule: squaredcos_cap_v2
+    variance_type: fixed_small # Yilun's paper uses fixed_small_log instead, but easy to cause Nan
+    clip_sample: True # required when predict_epsilon=False
+    prediction_type: epsilon # or sample
+
+  n_obs_steps: ${n_obs_steps}
+  n_future_steps: ${n_future_steps}
+  num_inference_steps: 5
+  obs_as_global_cond: ${obs_as_global_cond}
+  # crop_shape: null
+  cond_channels: 64
+  depths: [2,2,2,2]
+  channels: [64,64,64,64]
+  attn_depths: [0,0,0,0]
+  l1_loss_weight: 0.1
+pretrained_world_model_path: /home/lma326/diffusion_world_model/data/outputs/unet_image/unet_image_ddim_autoregressive_loss/checkpoints/latest.ckpt
+
+eval:
+  device: "cuda:0"
+  seed: 42
+  record_video: True
+  num_rollouts: 20
+  calculate_ssim: True
+
+hydra:
+  job:
+    override_dirname: ${name}
+  run:
+    dir: data/eval_outputs/unet_image/${name}
+  sweep:
+    dir: data/eval_outputs/unet_image/${name}
+    subdir: ${hydra.job.num}

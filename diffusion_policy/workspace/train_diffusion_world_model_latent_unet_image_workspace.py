@@ -195,7 +195,9 @@ class TrainDiffusionWorldModelUnetImageWorkspace(BaseWorkspace):
                         if self.epoch < cfg.training.autoregressive_training_begin_epoch:
                             raw_loss = self.model.compute_loss(batch)
                         else:
-                            raw_loss = self.model.compute_autoregressive_loss(batch, depth=self.model.n_future_steps)
+                            depth = int((2*self.epoch / cfg.training.num_epochs) * self.model.n_future_steps)
+                            depth = min(depth, self.model.n_future_steps)
+                            raw_loss = self.model.compute_autoregressive_loss(batch, depth=depth)
                         loss = raw_loss / cfg.training.gradient_accumulate_every
                         loss.backward()
 
