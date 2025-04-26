@@ -2,7 +2,7 @@ defaults:
   - _self_
   - task: pusht_image_world_model
 
-name: unet_image_ddim_autoregressive_loss
+name: latent_autoregressive_loss_less_downsample_cond_noise_future_10
 _target_: diffusion_policy.workspace.train_diffusion_world_model_unet_image_workspace.TrainDiffusionWorldModelUnetImageWorkspace
 
 task_name: ${task.name}
@@ -10,36 +10,49 @@ shape_meta: ${task.shape_meta}
 exp_name: "default"
 
 n_obs_steps: 4
-n_future_steps: 3
+n_future_steps: 8
 horizon: ${eval:'${n_obs_steps}+${n_future_steps}'}
 dataset_obs_steps: ${n_obs_steps}
 obs_as_global_cond: True
 
 world_model:
-  _target_: diffusion_policy.world_model.diffusion_world_model_unet_image.DiffusionWorldModelImageUnet
+  _target_: diffusion_policy.world_model.diffusion_world_model_latent_unet_image.DiffusionWorldModelImageLatentUnet
 
   shape_meta: ${shape_meta}
-
+  
   noise_scheduler:
     _target_: diffusers.schedulers.scheduling_ddpm.DDPMScheduler
-    num_train_timesteps: 5
+    num_train_timesteps: 10
     beta_start: 0.0001
     beta_end: 0.02
     beta_schedule: squaredcos_cap_v2
     variance_type: fixed_small # Yilun's paper uses fixed_small_log instead, but easy to cause Nan
-    clip_sample: True # required when predict_epsilon=False
-    prediction_type: epsilon # or sample
+    clip_sample: False # required when predict_epsilon=False
+    prediction_type: sample # or sample
+
+  auto_encoder:
+    _target_: diffusion_policy.model.equi.general_autoencoder.Autoencoder
+    obs_channels: 3
+    lats_channels: 1
+    encoder_channels: [64, 64, 64, 64]
+    decoder_channels: [64, 64, 64, 64]
+    l2_loss_weight: 0.0
+    latent_noise_std: 0.01
+    latent_norm_regularization_r: 1.0
+    latent_norm_regularization_weight: 0.005
+  pretrained_auto_encoder_path: /home/lma326/diffusion_world_model/data/outputs/autoencoder/train_autoencoder_96_to_12_norm_reg_add_noise/checkpoints/epoch=0420-val_loss=0.003.ckpt
 
   n_obs_steps: ${n_obs_steps}
   n_future_steps: ${n_future_steps}
-  num_inference_steps: 5
+  num_inference_steps: 10
   obs_as_global_cond: ${obs_as_global_cond}
   # crop_shape: null
-  cond_channels: 64
-  depths: [2,2,2,2]
-  channels: [64,64,64,64]
-  attn_depths: [0,0,0,0]
-  l1_loss_weight: 0.1
+  cond_channels: 128
+  depths: [4,4]
+  channels: [64,64]
+  attn_depths: [0,0]
+  l1_loss_weight: 0.0
+  cond_latent_noise_std: 0.002
 
   # scheduler.step params
   # predict_epsilon: True
@@ -91,7 +104,7 @@ training:
   # training loop control
   # in epochs
   rollout_every: 20
-  num_rollouts: 2
+  num_rollouts: 3
   checkpoint_every: 20
   val_every: 5
   sample_every: 1
@@ -108,7 +121,7 @@ logging:
   name: ${name}_${now:%Y.%m.%d-%H.%M.%S}
   tags: ["${name}", "${task_name}", "${exp_name}"]
   id: null
-  group: unet_image
+  group: latent_unet_image
 
 checkpoint:
   topk:
@@ -127,7 +140,7 @@ hydra:
   job:
     override_dirname: ${name}
   run:
-    dir: data/outputs/unet_image/${name}
+    dir: data/outputs/latent_unet_image/${name}
   sweep:
-    dir: data/outputs/unet_image/${name}
+    dir: data/outputs/latent_unet_image/${name}
     subdir: ${hydra.job.num}
