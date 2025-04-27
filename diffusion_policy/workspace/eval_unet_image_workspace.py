@@ -139,7 +139,7 @@ class EvalDiffusionWorldModelUnetImageWorkspace(BaseWorkspace):
                 else:
                     depth = cfg.eval.teacher_forcing_depth
                     assert depth <= world_model.n_future_steps
-                for i in range(world_model.n_obs_steps + depth):
+                for i in range(world_model.n_obs_steps + depth - 1):
                     image = dataset.replay_buffer['img'][start_idx + i]
                     if cfg.eval.record_video:
                         self.video_recoder.write_frame(image.astype(np.uint8))
@@ -154,7 +154,7 @@ class EvalDiffusionWorldModelUnetImageWorkspace(BaseWorkspace):
                         # append the first predicted image to update predicted_image_history
                         predicted_image_history['image'] = torch.cat([predicted_image_history['image'][:, 1:], predicted_images[:, :1]], dim=1)
                     unnormalized_images = predicted_images[0]
-                    predicted_image_trajectory[i + world_model.n_obs_steps] = unnormalized_images[0]
+                    predicted_image_trajectory[i + world_model.n_obs_steps + depth - 1] = unnormalized_images[0]
                     if cfg.eval.record_video:
                         unnormalized_images = (unnormalized_images.detach().cpu().numpy() * 255).astype(np.uint8)
                         unnormalized_images = np.moveaxis(unnormalized_images, 1, -1)  # B, H, W, C
