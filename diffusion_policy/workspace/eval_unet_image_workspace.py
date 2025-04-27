@@ -135,7 +135,7 @@ class EvalDiffusionWorldModelUnetImageWorkspace(BaseWorkspace):
                 if cfg.eval.record_video:
                     self.video_recoder.start(predict_filename)
                 if cfg.eval.auto_regressive:
-                    depth = 0
+                    depth = 1
                 else:
                     depth = cfg.eval.teacher_forcing_depth
                     assert depth <= world_model.n_future_steps
