@@ -115,6 +115,7 @@ class EvalDiffusionWorldModelUnetImageWorkspace(BaseWorkspace):
 
                 # image trajectory for calcualting mse
                 gt_image_trajectory = torch.tensor(dataset.replay_buffer['img'][start_idx:start_idx + episode_length], dtype=torch.float32)/255
+                gt_image_trajectory = torch.moveaxis(gt_image_trajectory, -1, 1).to(device)  # B, C, H, W
                 predicted_image_trajectory = torch.zeros_like(gt_image_trajectory)
                 predicted_image_trajectory[:world_model.n_obs_steps] = gt_image_trajectory[:world_model.n_obs_steps]
 
@@ -127,30 +128,36 @@ class EvalDiffusionWorldModelUnetImageWorkspace(BaseWorkspace):
                     self.video_recoder.stop()
 
                 # predicted video
-                image_history = dataset.replay_buffer['img'][start_idx:start_idx + world_model.n_obs_steps]
-                image_history = np.moveaxis(image_history,-1,1)/255
                 predicted_image_history = {
-                    "image": torch.tensor(image_history, dtype=torch.float32).to(device).unsqueeze(0)
+                    "image": gt_image_trajectory[:world_model.n_obs_steps].unsqueeze(0)
                 }
 
                 if cfg.eval.record_video:
                     self.video_recoder.start(predict_filename)
-                for i in range(world_model.n_obs_steps):
+                if cfg.eval.auto_regressive:
+                    depth = 0
+                else:
+                    depth = cfg.eval.teacher_forcing_depth
+                    assert depth <= world_model.n_future_steps
+                for i in range(world_model.n_obs_steps + depth):
                     image = dataset.replay_buffer['img'][start_idx + i]
                     if cfg.eval.record_video:
                         self.video_recoder.write_frame(image.astype(np.uint8))
-                for i in tqdm.trange(episode_length - world_model.n_obs_steps):
+                for i in tqdm.trange(episode_length - world_model.n_obs_steps - depth):
                     action = dataset.replay_buffer['action'][start_idx + i + world_model.n_obs_steps - 1:start_idx + i + world_model.n_obs_steps + world_model.n_future_steps - 1]
                     action = torch.tensor(action, dtype=torch.float32).to(device)
                     action = action.unsqueeze(0)
-                    predicted_images = world_model.predict_future(predicted_image_history, action)["predicted_future"] # B, T, C, H, W
-                    # append the first predicted image to update predicted_image_history
-                    predicted_image_history['image'] = torch.cat([predicted_image_history['image'][:, 1:], predicted_images[:, :1]], dim=1)
+                    if not cfg.eval.auto_regressive:
+                        predicted_image_history['image'] = gt_image_trajectory[i:i + world_model.n_obs_steps].unsqueeze(0)
+                    for k in range(depth):
+                        predicted_images = world_model.predict_future(predicted_image_history, action[:, k:k+1])["predicted_future"] # B, T, C, H, W
+                        # append the first predicted image to update predicted_image_history
+                        predicted_image_history['image'] = torch.cat([predicted_image_history['image'][:, 1:], predicted_images[:, :1]], dim=1)
                     unnormalized_images = predicted_images[0]
-                    unnormalized_images = torch.moveaxis(unnormalized_images, 1, -1)
                     predicted_image_trajectory[i + world_model.n_obs_steps] = unnormalized_images[0]
                     if cfg.eval.record_video:
                         unnormalized_images = (unnormalized_images.detach().cpu().numpy() * 255).astype(np.uint8)
+                        unnormalized_images = np.moveaxis(unnormalized_images, 1, -1)  # B, H, W, C
                         self.video_recoder.write_frame(unnormalized_images[0]) # only use the first frame
                 if cfg.eval.record_video:
                     self.video_recoder.stop()
@@ -161,7 +168,7 @@ class EvalDiffusionWorldModelUnetImageWorkspace(BaseWorkspace):
                 log_str = f"Rollout {index+1}/{cfg.eval.num_rollouts}. Episode {idx} - Mean Squared Error: {mse_loss}. "
 
                 if cfg.eval.calculate_ssim:
-                    ssim_loss = 1 - ms_ssim(torch.moveaxis(gt_image_trajectory, -1, 1), torch.moveaxis(predicted_image_trajectory, -1, 1), data_range=1.0, size_average=True, win_size=11, weights=[0.6, 0.2, 0.2])
+                    ssim_loss = 1 - ms_ssim(gt_image_trajectory, predicted_image_trajectory, data_range=1.0, size_average=True, win_size=11, weights=[0.6, 0.2, 0.2])
                     ssim_list.append(ssim_loss.item())
                     print(f"SSIM: {ssim_loss.item()}")
                     log_str += f"SSIM: {ssim_loss.item()}. "
