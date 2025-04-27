@@ -1,8 +1,8 @@
 defaults:
   - _self_
-  - task: pusht_image_world_model
+  - task: pusht_image_world_model_test
 
-name: eval_unet_image
+name: eval_unet_image_on_test_teacher_forcing_depth_5
 _target_: diffusion_policy.workspace.eval_unet_image_workspace.EvalDiffusionWorldModelUnetImageWorkspace
 
 task_name: ${task.name}
@@ -10,7 +10,7 @@ shape_meta: ${task.shape_meta}
 exp_name: "default"
 
 n_obs_steps: 4
-n_future_steps: 1
+n_future_steps: 5
 horizon: ${eval:'${n_obs_steps}+${n_future_steps}'}
 dataset_obs_steps: ${n_obs_steps}
 obs_as_global_cond: True
@@ -48,6 +48,8 @@ eval:
   record_video: True
   num_rollouts: 20
   calculate_ssim: True
+  auto_regressive: False
+  teacher_forcing_depth: 5
 
 hydra:
   job:

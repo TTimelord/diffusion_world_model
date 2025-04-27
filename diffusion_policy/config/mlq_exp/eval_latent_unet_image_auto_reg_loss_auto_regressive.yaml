@@ -1,0 +1,75 @@
+defaults:
+  - _self_
+  - task: pusht_image_world_model_test
+
+name: eval_latent_unet_image_auto_reg_loss_auto_regressive
+_target_: diffusion_policy.workspace.eval_unet_image_workspace.EvalDiffusionWorldModelUnetImageWorkspace
+
+task_name: ${task.name}
+shape_meta: ${task.shape_meta}
+exp_name: "default"
+
+n_obs_steps: 4
+n_future_steps: 1
+horizon: ${eval:'${n_obs_steps}+${n_future_steps}'}
+dataset_obs_steps: ${n_obs_steps}
+obs_as_global_cond: True
+
+world_model:
+  _target_: diffusion_policy.world_model.diffusion_world_model_latent_unet_image.DiffusionWorldModelImageLatentUnet
+
+  shape_meta: ${shape_meta}
+  
+  noise_scheduler:
+    _target_: diffusers.schedulers.scheduling_ddpm.DDPMScheduler
+    num_train_timesteps: 10
+    beta_start: 0.0001
+    beta_end: 0.02
+    beta_schedule: squaredcos_cap_v2
+    variance_type: fixed_small # Yilun's paper uses fixed_small_log instead, but easy to cause Nan
+    clip_sample: False # required when predict_epsilon=False
+    prediction_type: sample # or sample
+
+  auto_encoder:
+    _target_: diffusion_policy.model.equi.general_autoencoder.Autoencoder
+    obs_channels: 3
+    lats_channels: 1
+    encoder_channels: [64, 64, 64, 64]
+    decoder_channels: [64, 64, 64, 64]
+    l2_loss_weight: 0.0
+    latent_noise_std: 0.02
+    latent_norm_regularization_r: 1.0
+    latent_norm_regularization_weight: 0.005
+    ssim_weight: 1.0
+  pretrained_auto_encoder_path: /home/lma326/diffusion_world_model/data/outputs/autoencoder/train_autoencoder_96_to_12_norm_reg_add_noise_ssim/checkpoints/latest.ckpt
+
+  n_obs_steps: ${n_obs_steps}
+  n_future_steps: ${n_future_steps}
+  num_inference_steps: 10
+  obs_as_global_cond: ${obs_as_global_cond}
+  # crop_shape: null
+  cond_channels: 128
+  depths: [4,4]
+  channels: [64,64]
+  attn_depths: [0,0]
+  l1_loss_weight: 0.0
+  cond_latent_noise_std: 0.002
+pretrained_world_model_path: /home/lma326/diffusion_world_model/data/outputs/latent_unet_image/latent_autoregressive_loss_cond_noise_ssim_encoder/checkpoints/latest.ckpt
+
+eval:
+  device: "cuda:0"
+  seed: 42
+  record_video: True
+  num_rollouts: 20
+  calculate_ssim: True
+  auto_regressive: True
+  teacher_forcing_depth: 1
+
+hydra:
+  job:
+    override_dirname: ${name}
+  run:
+    dir: data/eval_outputs/latent_unet_image/${name}
+  sweep:
+    dir: data/eval_outputs/latent_unet_image/${name}
+    subdir: ${hydra.job.num}

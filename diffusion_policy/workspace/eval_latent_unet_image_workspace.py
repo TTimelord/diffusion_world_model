@@ -21,7 +21,7 @@ import tqdm
 import numpy as np
 import shutil
 from diffusion_policy.workspace.base_workspace import BaseWorkspace
-from diffusion_policy.world_model.diffusion_world_model_unet_image import DiffusionWorldModelImageUnet
+from diffusion_policy.world_model.diffusion_world_model_latent_unet_image import DiffusionWorldModelImageLatentUnet
 from diffusion_policy.dataset.base_dataset import BaseImageDataset
 from diffusion_policy.dataset.pusht_image_dataset import PushTImageDataset
 from diffusion_policy.env_runner.base_image_runner import BaseImageRunner
@@ -44,7 +44,7 @@ class EvalDiffusionWorldModelUnetImageWorkspace(BaseWorkspace):
         random.seed(seed)
 
         # configure model
-        self.model: DiffusionWorldModelImageUnet = hydra.utils.instantiate(cfg.world_model)
+        self.model: DiffusionWorldModelImageLatentUnet = hydra.utils.instantiate(cfg.world_model)
         checkpoint = torch.load(cfg.pretrained_world_model_path)
         missing, unexpected = self.model.load_state_dict(checkpoint["state_dicts"]["model"], strict=True)
 
@@ -143,14 +143,18 @@ class EvalDiffusionWorldModelUnetImageWorkspace(BaseWorkspace):
                     image = dataset.replay_buffer['img'][start_idx + i]
                     if cfg.eval.record_video:
                         self.video_recoder.write_frame(image.astype(np.uint8))
+                last_latent = None
                 for i in tqdm.trange(episode_length - world_model.n_obs_steps - depth):
                     action = dataset.replay_buffer['action'][start_idx + i + world_model.n_obs_steps - 1:start_idx + i + world_model.n_obs_steps + world_model.n_future_steps - 1]
                     action = torch.tensor(action, dtype=torch.float32).to(device)
                     action = action.unsqueeze(0)
                     if not cfg.eval.auto_regressive:
+                        last_latent = None
                         predicted_image_history['image'] = gt_image_trajectory[i:i + world_model.n_obs_steps].unsqueeze(0)
                     for k in range(depth):
-                        predicted_images = world_model.predict_future(predicted_image_history, action[:, k:k+1])["predicted_future"] # B, T, C, H, W
+                        predicted_results = world_model.predict_future(predicted_image_history, action[:, k:k+1], last_latent) # B, T, C, H, W
+                        predicted_images = predicted_results['predicted_future']
+                        last_latent = predicted_results['new_latent_history']
                         # append the first predicted image to update predicted_image_history
                         predicted_image_history['image'] = torch.cat([predicted_image_history['image'][:, 1:], predicted_images[:, :1]], dim=1)
                     unnormalized_images = predicted_images[0]
