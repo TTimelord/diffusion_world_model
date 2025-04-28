@@ -174,7 +174,7 @@ class EvalDiffusionWorldModelLatentUnetImageWorkspace(BaseWorkspace):
                 if cfg.eval.record_video:
                     self.video_recorder.start(predict_filename)
                     if self.test_rot:
-                        self.video_recorder_rot.start(predict_rotation_filename)
+                        self.video_recorder_rot.start(predict_filename_rot)
                 for i in range(world_model.n_obs_steps + depth - 1):
                     image = dataset.replay_buffer['img'][start_idx + i].astype(np.uint8)
                     if cfg.eval.record_video:
@@ -201,16 +201,16 @@ class EvalDiffusionWorldModelLatentUnetImageWorkspace(BaseWorkspace):
                         # append the first predicted image to update predicted_image_history
                         predicted_image_history['image'] = torch.cat([predicted_image_history['image'][:, 1:], predicted_images[:, :1]], dim=1)
                         if self.test_rot:
-                            predicted_results_rot = world_model.predict_future(predicted_image_history_rot, action[:, k:k+1], last_latent_rot) # B, T, C, H, W
+                            action_rot = action @ self.rotation_matrix.T.to(device)
+                            predicted_results_rot = world_model.predict_future(predicted_image_history_rot, action_rot[:, k:k+1], last_latent_rot) # B, T, C, H, W
                             predicted_images_rot = predicted_results_rot['predicted_future']
                             last_latent_rot = predicted_results_rot['new_latent_history']
                             # append the first predicted image to update predicted_image_history
                             predicted_image_history_rot['image'] = torch.cat([predicted_image_history_rot['image'][:, 1:], predicted_images_rot[:, :1]], dim=1)
                     unnormalized_images = predicted_images[0]
-                    if self.test_rot:
-                        unnormalized_images_rot = predicted_images_rot[0]
                     predicted_image_trajectory[i + world_model.n_obs_steps + depth - 1] = unnormalized_images[0]
                     if self.test_rot:
+                        unnormalized_images_rot = predicted_images_rot[0]
                         predicted_image_trajectory_rot[i + world_model.n_obs_steps + depth - 1] = unnormalized_images_rot[0]
                     if cfg.eval.record_video:
                         unnormalized_images = (unnormalized_images.detach().cpu().numpy() * 255).astype(np.uint8)
