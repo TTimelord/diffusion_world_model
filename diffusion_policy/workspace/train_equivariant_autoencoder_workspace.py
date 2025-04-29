@@ -276,11 +276,12 @@ class TrainEquivariantAutoencoderWorkspace(BaseWorkspace):
                             nobs = self.model.normalizer.normalize(batch)
                             gts = nobs['image']
                             reconstructions = self.model.decode(self.model.encode(gts))
+                            folder = pathlib.Path(self.output_dir).joinpath('media')
+                            folder.mkdir(parents=False, exist_ok=True)
+                            # gt_filename.parent.mkdir(parents=False, exist_ok=True)
                             for idx, gt in enumerate(list(gts)):
-                                save_image(gt, pathlib.Path(self.output_dir).joinpath(
-                                'media', f"{self.epoch}_val_gt_{wv.util.generate_id()}.jpg"))
-                                save_image(reconstructions[idx], pathlib.Path(self.output_dir).joinpath(
-                                'media', f"{self.epoch}_val_reconstruct_{wv.util.generate_id()}.jpg"))
+                                save_image(gt, folder.joinpath(f"{self.epoch}_val_gt_{wv.util.generate_id()}.jpg"))
+                                save_image(reconstructions[idx], folder.joinpath(f"{self.epoch}_val_reconstruct_{wv.util.generate_id()}.jpg"))
                                 
                                 reconstruct_wandb_img = wandb.Image(reconstructions[idx])
                                 gt_wandb_img = wandb.Image(gt)

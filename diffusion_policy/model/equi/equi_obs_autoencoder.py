@@ -22,7 +22,13 @@ class EquivariantAutoencoder(ModuleAttrMixin):
                  N=8,
                  initialize=True,
                  NUM_CHANNEL_1=32,
-                 NUM_CHANNEL_2=64
+                 NUM_CHANNEL_2=64,
+                 l2_loss_weight=0.00001,
+                 recursive_steps=1,
+                 recursive_weight=0.5,
+                 latent_noise_std=None,
+                 latent_norm_regularization_r=None,
+                 latent_norm_regularization_weight=None,
                  ):
         super().__init__()
         self.encoder = EquivResEnc96to24(obs_channels, lats_channels, initialize, N, NUM_CHANNEL_1, NUM_CHANNEL_2)
@@ -31,6 +37,13 @@ class EquivariantAutoencoder(ModuleAttrMixin):
 
         self.obs_channels = obs_channels
         self.lats_channels = lats_channels
+        
+        self.l2_loss_weight = l2_loss_weight
+        self.recursive_steps = recursive_steps
+        self.recursive_weight = recursive_weight
+        self.latent_noise_std = latent_noise_std
+        self.latent_norm_regularization_r = latent_norm_regularization_r
+        self.latent_norm_regularization_weight = latent_norm_regularization_weight
     
     def encode(self, obs):
         if isinstance(obs, nn.GeometricTensor):
@@ -44,20 +57,24 @@ class EquivariantAutoencoder(ModuleAttrMixin):
         out = self.decoder(lats)
         return out
     
-    def compute_loss(self, batch: Dict[str, torch.Tensor]):
+    def compute_loss(self, batch: Dict[str, torch.Tensor]):        
         nobs = self.normalizer.normalize(batch['obs'])
         obs = nobs['image'].squeeze(1)
-        reconstructions = self.decode(self.encode(obs))
+        latent = self.encode(obs)
+        flattened_latent = latent.view(latent.size(0), -1)
+        dimension = flattened_latent.size(1)
+
+        if self.latent_noise_std is not None:
+            noise = torch.randn_like(latent) * self.latent_noise_std * self.latent_norm_regularization_r
+            latent = latent + noise
+        reconstructions = self.decode(latent)
         
-        # loss = multi_scale_ssim(
-        #     obs, reconstructions,
-        #     data_range=1.0, 
-        #     reduction='mean', 
-        #     kernel_size=3,
-        #     scale_weights=torch.tensor([0.5, 0.3, 0.2], device=obs.device, dtype=torch.float)
-        # )
+        loss = torch.nn.functional.mse_loss(obs, reconstructions, reduction='mean') \
+            # + self.l2_loss_weight * torch.nn.functional.mse_loss(latent, torch.zeros_like(latent), reduction='mean')
         
-        loss = torch.nn.functional.mse_loss(obs, reconstructions, reduce='mean')
+        if self.latent_norm_regularization_r is not None and self.latent_norm_regularization_weight is not None:
+            latent_norm_loss = torch.mean((torch.sum(flattened_latent ** 2, dim=1) - self.latent_norm_regularization_r * dimension)**2)
+            loss += self.latent_norm_regularization_weight * latent_norm_loss
         
         return loss
         

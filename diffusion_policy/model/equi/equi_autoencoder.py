@@ -218,13 +218,12 @@ class EquivResDec24to96(torch.nn.Module):
                 bias=True,
                 initialize=initialize
             ),
+            nn.PointwiseNonLinearity(nn.FieldType(self.group, out_channels * [self.group.trivial_repr]), 'p_tanh')
         )
-        self.tanh = torch.nn.Tanh()
         
     def forward(self, x) -> torch.Tensor:
         if type(x) is torch.Tensor:
             x = nn.GeometricTensor(x, nn.FieldType(self.group, self.in_channels * [self.group.trivial_repr]))
-        return self.tanh(self.up_blocks(x).tensor)
         return self.up_blocks(x).tensor
     
     
